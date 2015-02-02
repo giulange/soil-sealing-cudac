@@ -1,6 +1,6 @@
 /*
 	Object:		Raster-scan and label-equivalence-based algorithm.
-	Authors:	Massimo Nicolazzo & Giuliano Langella
+	Authors:	Giuliano Langella & Massimo Nicolazzo
 	email:		gyuliano@libero.it
 
 
@@ -16,7 +16,7 @@ DESCRIPTION:
 		ww		cc		xx
 		xx		xx		xx
 	assuming that:
-		> cc is is the background(=0)/foreground(=1) pixel at (r,c),
+		> cc is the background(=0)/foreground(=1) pixel at (r,c),
 		> nw, nn, ne, ww are the north-west, north, north-east and west pixels in the eight connected connectivity,
 		> xx are skipped pixels.
 	Therefore the mask has 4 active pixels with(out) object pixels (that is foreground pixels).
@@ -31,30 +31,71 @@ DESCRIPTION:
 #include <string.h>       	/* strerror */
 #include <math.h>			// ceil
 #include <time.h>			// CLOCKS_PER_SEC
-#include <helper_cuda.h>	// helper for checking cuda initialization and error checking
+//#include </usr/local/cuda/samples/common/inc/helper_cuda.h>	// helper for checking cuda initialization and error checking
+//#include </usr/local/cuda/samples/common/inc/helper_string.h>
+
+// CUDA
+#include <cuda.h>
+#include <cuda_runtime.h>
 
 //	-indexes
-#define durban(c,r)		urban[		(c)		+	(r)		*(blockDim.x)	] // I: scan value at current [r,c]
-#define nw_pol(c,r)		lab_mat_sh[	(c-1)	+	(r-1)	*(blockDim.x)	] // O: scan value at North-West
-#define nn_pol(c,r)		lab_mat_sh[	(c+0)	+	(r-1)	*(blockDim.x)	] // O: scan value at North
-#define ne_pol(c,r)		lab_mat_sh[	(c+1)	+	(r-1)	*(blockDim.x)	] // O: scan value at North-East
-#define ww_pol(c,r)		lab_mat_sh[	(c-1)	+	(r+0)	*(blockDim.x)	] // O: scan value at West
-#define ee_pol(c,r)		lab_mat_sh[	(c+1)	+	(r+0)	*(blockDim.x)	] // O: scan value at West
-#define sw_pol(c,r)		lab_mat_sh[	(c-1)	+	(r+1)	*(blockDim.x)	] // O: scan value at South-West
-#define ss_pol(c,r)		lab_mat_sh[	(c+0)	+	(r+1)	*(blockDim.x)	] // O: scan value at South-West
-#define se_pol(c,r)		lab_mat_sh[	(c+1)	+	(r+1)	*(blockDim.x)	] // O: scan value at South-West
-#define cc_pol(c,r)		lab_mat_sh[	(c+0)	+	(r+0)	*(blockDim.x)	] // O: scan value at current [r,c] which is shifted by [1,1] in O
+#define durban(cc,rr)	urban[		(cc)	+	(rr)	*(blockDim.x)	] // I: scan value at current [r,c]
+#define nw_pol(cc,rr)	lab_mat_sh[	(cc-1)	+	(rr-1)	*(blockDim.x)	] // O: scan value at North-West
+#define nn_pol(cc,rr)	lab_mat_sh[	(cc+0)	+	(rr-1)	*(blockDim.x)	] // O: scan value at North
+#define ne_pol(cc,rr)	lab_mat_sh[	(cc+1)	+	(rr-1)	*(blockDim.x)	] // O: scan value at North-East
+#define ww_pol(cc,rr)	lab_mat_sh[	(cc-1)	+	(rr+0)	*(blockDim.x)	] // O: scan value at West
+#define ee_pol(cc,rr)	lab_mat_sh[	(cc+1)	+	(rr+0)	*(blockDim.x)	] // O: scan value at West
+#define sw_pol(cc,rr)	lab_mat_sh[	(cc-1)	+	(rr+1)	*(blockDim.x)	] // O: scan value at South-West
+#define ss_pol(cc,rr)	lab_mat_sh[	(cc+0)	+	(rr+1)	*(blockDim.x)	] // O: scan value at South-West
+#define se_pol(cc,rr)	lab_mat_sh[	(cc+1)	+	(rr+1)	*(blockDim.x)	] // O: scan value at South-West
+#define cc_pol(cc,rr)	lab_mat_sh[	(cc+0)	+	(rr+0)	*(blockDim.x)	] // O: scan value at current [r,c] which is shifted by [1,1] in O
 
 // GLOBAL VARIABLES
-#define 		Vb			0	// background value
 #define			Vo			1	// object value
+#define			Vb			0	// object value
 char			buffer[255];
+const char		*Lcuda		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/CUDA-code.txt";
+const char 		*ALL_txt	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ALL.txt";
+/*
+ * 	To test my CCL .cu code, I can use the following input parameters:
+ * 		8 8 6999 6999
+ * 	and NTHREADSX =
+ * 		8
+ * 	with a very large file called:
+ * 		const char 		*ALL_txt	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ALL-big-test.txt";
+ */
+
+//
+/*
+unsigned int r 			= threadIdx.y;
+unsigned int c 			= threadIdx.x;
+unsigned int bdx		= blockDim.x;
+unsigned int bdy		= blockDim.y;
+unsigned int bix		= blockIdx.x;
+unsigned int biy		= blockIdx.y;
+unsigned int gdx		= gridDim.x;
+unsigned int gdy		= gridDim.y;
+unsigned int iTile		= gdx * biy + bix;
+*/
+/*
+#define	 		r 		threadIdx.y
+#define			c		threadIdx.x
+#define			bdx		blockDim.x
+#define			bdy		blockDim.y
+#define			bix		blockIdx.x
+#define			biy		blockIdx.y
+#define			gdx		gridDim.x
+#define			gdy		gridDim.y
+#define			iTile	gdx * biy + bix
+*/
 
 //---------------------------- FUNCTIONS PROTOTYPES
 //		** I/O **
-void read_mat(unsigned char *, unsigned int, unsigned int, char *);
-void write_linmat_tiled(unsigned int *, unsigned int, unsigned int, unsigned int, unsigned int, char *);
-void write_linmat_matlab(unsigned int *, unsigned int, unsigned int, unsigned int, unsigned int, char *);
+void read_urbmat(unsigned char *, unsigned int, unsigned int, const char *);
+void write_urbmat_tiled( unsigned char *, unsigned int, unsigned int, unsigned int, unsigned int, const char *);
+void write_urbmat_matlab( unsigned char *, unsigned int, unsigned int, unsigned int, unsigned int, const char *);
+void write_labmat_tiled( unsigned int *,  unsigned int, unsigned int, unsigned int, unsigned int, const char *);
+void write_labmat_matlab(unsigned int *,  unsigned int, unsigned int, unsigned int, unsigned int, const char *);
 //		** kernels **
 //	(1)
 __global__ void intra_tile_labeling( const unsigned char *,unsigned int, unsigned int * );
@@ -69,19 +110,96 @@ __global__ void intra_tile_re_label(unsigned int,unsigned int *);
 __global__ void inter_tile_labeling( unsigned int *, bool );
 //---------------------------- FUNCTIONS PROTOTYPES
 
-void read_mat(unsigned char *urban, unsigned int nrows, unsigned int ncols, char *filename)
+void read_urbmat(unsigned char *urban, unsigned int nrows, unsigned int ncols, const char *filename)
 {
+	/*
+	 * 	This function reads the Image and store in RAM with a 1-pixel-width zero-padding.
+	 */
 	unsigned int rr,cc;
 	FILE *fid ;
 	int a;
 	fid = fopen(filename,"rt");
-	if (fid == NULL) { printf("Error opening file!\n"); exit(1); }
+	if (fid == NULL) { printf("Error opening file:\n\t%s\n",filename); exit(1); }
 	for(rr=0;rr<nrows;rr++) for(cc=0;cc<ncols;cc++) urban[cc+rr*ncols] = 0;
-	for(rr=1;rr<nrows-1;rr++) for(cc=1;cc<ncols-1;cc++) { fscanf(fid, "%d",&a);	urban[cc+rr*ncols]=(unsigned char)a; }
+	for(rr=1;rr<nrows-1;rr++){
+		for(cc=1;cc<ncols-1;cc++){
+			fscanf(fid, "%d",&a);
+			urban[cc+rr*ncols]=(unsigned char)a;
+			//printf("%d ",a);
+		}
+		//printf("\n");
+	}
 	fclose(fid);
 }
+void write_urbmat_tiled(unsigned char *urb_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, const char *filename)
+{
+	unsigned long int rr,cc,ntX,ntY;
+	FILE *fid ;
+	fid = fopen(filename,"w");
+	if (fid == NULL) { printf("Error opening file %s!\n",filename); exit(1); }
+	long long int offset;
 
-void write_linmat_tiled(unsigned int *lab_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, char *filename)
+	for(ntY=0;ntY<ntilesY;ntY++)
+	{
+		for(rr=0;rr<nr;rr++)
+		{
+			for(ntX=0;ntX<ntilesX;ntX++)
+			{
+				for(cc=0;cc<nc;cc++)
+				{
+					/*if( !(((cc==nc-1) && ((ntilesX*ntY+ntX+1)%ntilesX)==0))	&&	// do not print last column
+						!(((rr==nr-1) && (ntY==ntilesY-1))) 					// do not print last row
+					)*/
+					{
+						offset = (ntilesX*ntY+ntX)*nc*nr+(nc*rr+cc);
+						fprintf(fid, "%6d ",urb_mat[offset]);
+						//printf(		 "%d ",lab_mat[offset]);
+					}
+				}
+				fprintf(fid,"\t\t");
+				//printf(		"\n");
+			}
+			fprintf(fid,"\n");
+			//printf(		"\n");
+		}
+		fprintf(fid,"\n");
+	}
+	fclose(fid);
+}
+void write_urbmat_matlab(unsigned char *urb_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, const char *filename)
+{
+	unsigned int rr,cc,ntX,ntY;
+	FILE *fid ;
+	fid = fopen(filename,"w");
+	if (fid == NULL) { printf("Error opening file %s!\n",filename); exit(1); }
+	int offset;
+
+	for(ntY=0;ntY<ntilesY;ntY++)
+	{
+		for(rr=1;rr<nr;rr++)
+		{
+			for(ntX=0;ntX<ntilesX;ntX++)
+			{
+				for(cc=1;cc<nc;cc++)
+				{
+					if( !(((cc==nc-1) && ((ntilesX*ntY+ntX+1)%ntilesX)==0))	&&	// do not print last column
+						!(((rr==nr-1) && (ntY==ntilesY-1))) 					// do not print last row
+
+					)
+					{
+						offset = (ntilesX*ntY+ntX)*nc*nr+(nc*rr+cc);
+						fprintf(fid, "%6d ",urb_mat[offset]);
+						//printf(		 "%d ",lab_mat[offset]);
+					}
+				}
+			}
+			fprintf(fid,"\n");
+			//printf(		"\n");
+		}
+	}
+	fclose(fid);
+}
+void write_labmat_tiled(unsigned int *lab_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, const char *filename)
 {
 	unsigned int rr,cc,ntX,ntY;
 	FILE *fid ;
@@ -116,8 +234,7 @@ void write_linmat_tiled(unsigned int *lab_mat, unsigned int nr, unsigned int nc,
 	}
 	fclose(fid);
 }
-
-void write_linmat_matlab(unsigned int *lab_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, char *filename)
+void write_labmat_matlab(unsigned int *lab_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, const char *filename)
 {
 	unsigned int rr,cc,ntX,ntY;
 	FILE *fid ;
@@ -150,7 +267,6 @@ void write_linmat_matlab(unsigned int *lab_mat, unsigned int nr, unsigned int nc
 	}
 	fclose(fid);
 }
-
 __global__ void inter_tile_labeling( unsigned int *lm, bool *gfound )
 {
 	/*
@@ -172,10 +288,16 @@ __global__ void inter_tile_labeling( unsigned int *lm, bool *gfound )
 	// http://stackoverflow.com/questions/12505750/how-can-a-global-function-return-a-value-or-break-out-like-c-c-does
 	__shared__ bool someoneFoundIt;
 
-	unsigned int r 		= threadIdx.y;
-	unsigned int c 		= threadIdx.x;
-	unsigned int bdx	= blockDim.x;
-	unsigned int bdy	= blockDim.y;
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
+
 	unsigned int otid	= bdx * r + c;
 
 	unsigned int cc_0	= bdx*bdy*0;
@@ -186,7 +308,6 @@ __global__ void inter_tile_labeling( unsigned int *lm, bool *gfound )
 	unsigned int ccR_0	= bdx*bdy*5;
 
 	// CC tile
-	int iTile			= gridDim.x * blockIdx.y + blockIdx.x;
 	unsigned int cc_tid	=	(r * gridDim.x * blockDim.x + c) 			+					// dentro la 1° tile		blockDim.x*(blockDim.y-1)+threadIdx.x
 							(blockDim.x - 0) * (iTile % gridDim.x)		+					// itile in orizzontale		0
 							(iTile / gridDim.x) * (blockDim.y-0) * gridDim.x * blockDim.x;	// itile in verticale		0
@@ -322,6 +443,42 @@ __global__ void inter_tile_labeling( unsigned int *lm, bool *gfound )
 
 }//kernel
 
+__global__ void linearize_tiles( unsigned char *urban, unsigned int NC )
+{
+	/*
+	 * 	NOTE: I am not sure that for larger image sizes this kernel works fine!!
+	 */
+	extern __shared__ unsigned char  urban_sh[];
+
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
+
+	//unsigned int NC		= (bdx-1) * gdx;
+	unsigned int otid		= bdx * r + c;
+	unsigned int itid		= (r * NC + c) 					+		// (3) within-tile	offset
+							  (bdx - 1) * (iTile % gdx)		+		// (2) horizontal 	offset
+							  (iTile / gdx) * (bdy-1) * NC;			// (1) vertical 	offset
+	unsigned int ttid 		= iTile*bdx*bdy+otid;					// linearized tiles + 1-pixel-width extra border along the tile perimeter.
+	unsigned int stid		= (r * gdx * bdx + c) 			+		// (3) within-tile	offset
+							  (bdx - 0) * (iTile % gdx)		+		// (2) horizontal 	offset
+							  (iTile / gdx) * (bdy-0) * gdx * bdx;	// (1) vertical 	offset
+
+	if (iTile<gdx*gdy)
+	{
+		// why not urban[ttid] = urban[itid] directly??
+		urban_sh[otid] 	= urban[itid];		__syncthreads();
+		urban[ttid]		= urban_sh[otid];	__syncthreads();
+	}
+}
+
+
 __global__ void intra_tile_labeling(const unsigned char *urban,unsigned int NC,unsigned int *lab_mat)
 {
 	// See this link when using more then one extern __shared__ array:
@@ -334,43 +491,70 @@ __global__ void intra_tile_labeling(const unsigned char *urban,unsigned int NC,u
 	unsigned int c 			= threadIdx.x;
 	unsigned int bdx		= blockDim.x;
 	unsigned int bdy		= blockDim.y;
-	unsigned int iTile		= gridDim.x * blockIdx.y + blockIdx.x;
-	unsigned int otid		= blockDim.x * r + c;
-	unsigned int itid		= (r * NC + c) 								+					// dentro la 1° tile		0
-							  (blockDim.x - 1) * (iTile % gridDim.x)	+					// itile in orizzontale		0
-							  (iTile / gridDim.x) * (blockDim.y-1) * NC;					// itile in verticale		0
-	unsigned int ttid 		= iTile*blockDim.x*blockDim.y+otid;
-	unsigned int stid		= (r * gridDim.x * blockDim.x + c) 			+					// dentro la 1° tile		0
-			  	  	  	  	  (blockDim.x - 0) * (iTile % gridDim.x)	+					// itile in orizzontale		0
-			  	  	  	  	  (iTile / gridDim.x) * (blockDim.y-0) * gridDim.x * blockDim.x;// itile in verticale		42
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
 
-	if (iTile<gridDim.x*gridDim.y)
+	unsigned int otid		= bdx * r + c;
+	unsigned int itid		= (r * NC + c) 					+		// dentro la 1° tile		0
+							  (bdx - 1) * (iTile % gdx)		+		// itile in orizzontale		0
+							  (iTile / gdx) * (bdy-1) * NC;			// itile in verticale		0
+	unsigned int ttid 		= iTile*bdx*bdy+otid;
+	unsigned int stid		= (r * gdx * bdx + c) 			+		// dentro la 1° tile		0
+			  	  	  	  	  (bdx - 0) * (iTile % gdx)		+		// itile in orizzontale		0
+			  	  	  	  	  (iTile / gdx) * (bdy-0) * gdx * bdx;	// itile in verticale		42
+
+	if (iTile<gdx*gdy)
 	{
 		lab_mat_sh[otid] 	= 0;
 		// if (r,c) is object pixel
-		if  (urban[itid]==Vo)  lab_mat_sh[otid] = ttid;
+		//if  (urban[ttid]==Vo)  lab_mat_sh[otid] = ttid; // use ttid with 	"linearize_tiles"
+		if  (urban[itid]==Vo)  lab_mat_sh[otid] = ttid; // use itid without "linearize_tiles"
 		__syncthreads();
 
 		found = true;
 		while(found)
 		{
+			/* 		________________
+			 * 		|	 |    |    |
+			 *		| nw | nn | ne |
+			 *		|____|____|____|
+			 * 		|	 |    |    |
+			 * 		| ww | cc | ee |	pixel position
+			 *		|____|____|____|
+			 * 		|	 |    |    |
+			 * 		| sw | ss | se |
+			 * 		|____|____|____|
+			 */
 			found = false;
+
+			// NW:
 			if(	c>0 && r>0 && nw_pol(c,r)!=0 && nw_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = nw_pol(c,r); found = true; }
+			// NN:
 			if( r>0 && nn_pol(c,r)!=0 && nn_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = nn_pol(c,r); found = true; }
+			// NE:
 			if( c<bdx-1 && r>0 && ne_pol(c,r)!=0 && ne_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = ne_pol(c,r); found = true; }
+			// WW:
 			if( c>0 && ww_pol(c,r)!=0 && ww_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = ww_pol(c,r); found = true; }
+			// EE:
 			if( c<bdx-1 && ee_pol(c,r)!=0 && ee_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = ee_pol(c,r); found = true; }
+			// SW:
 			if( c>0 && r<bdy-1 && sw_pol(c,r)!=0 && sw_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = sw_pol(c,r); found = true; }
+			// SS:
 			if( r<bdy-1 && ss_pol(c,r)!=0 && ss_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = ss_pol(c,r); found = true; }
+			// SE:
 			if( c<bdx-1 && r<bdy-1 && se_pol(c,r)!=0 && se_pol(c,r)<cc_pol(c,r))
 				{ cc_pol(c,r) = se_pol(c,r); found = true; }
+
 			__syncthreads();
 		}
 
@@ -379,7 +563,7 @@ __global__ void intra_tile_labeling(const unsigned char *urban,unsigned int NC,u
 		 * 	To leave same matrix configuration as input urban use stid instead!!
 		 */
 		lab_mat[ttid] = lab_mat_sh[otid];
-		__syncthreads();
+		//__syncthreads();
 	}
 }
 
@@ -388,31 +572,38 @@ __global__ void intra_tile_labeling_opt(const unsigned char *urban,unsigned int 
 	extern __shared__ unsigned int  lab_mat_sh[];
 	__shared__ bool found[1];
 
-	unsigned char urban_loc;
-	unsigned char neigh_loc[8];
-	//unsigned int fill_val 	= 0xFFFFFFFFFFFFFFFF;
-	unsigned int newLabel;
-	unsigned int oldLabel;
-
 	unsigned int r 			= threadIdx.y;
 	unsigned int c 			= threadIdx.x;
 	unsigned int bdx		= blockDim.x;
 	unsigned int bdy		= blockDim.y;
 	unsigned int bix		= blockIdx.x;
-	unsigned int iTile		= gridDim.x * blockIdx.y + blockIdx.x;
-	unsigned int otid		= blockDim.x * r + c;
-	unsigned int itid		= (r * NC + c) 								+					// dentro la 1° tile		0
-							  (blockDim.x - 1) * (iTile % gridDim.x)	+					// itile in orizzontale		0
-							  (iTile / gridDim.x) * (blockDim.y-1) * NC;					// itile in verticale		0
-	unsigned int ttid 		= iTile*blockDim.x*blockDim.y+otid;
-/*	unsigned int stid		= (r * gridDim.x * blockDim.x + c) 			+					// dentro la 1° tile		0
-			  	  	  	  	  (blockDim.x - 0) * (iTile % gridDim.x)	+					// itile in orizzontale		0
-			  	  	  	  	  (iTile / gridDim.x) * (blockDim.y-0) * gridDim.x * blockDim.x;// itile in verticale		42
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
+
+	unsigned char urban_loc;
+	unsigned char neigh_loc[8];
+	unsigned int fill_val 	= 0xFFFFFFFFFFFFFFFF;
+	unsigned int newLabel;
+	unsigned int oldLabel;
+
+	unsigned int otid		= bdx * r + c;
+	unsigned int itid		= (r * NC + c) 					+		// dentro la 1° tile		0
+							  (bdx - 1) * (iTile % gdx)		+		// itile in orizzontale		0
+							  (iTile / gdx) * (bdy-1) * NC;			// itile in verticale		0
+	unsigned int ttid 		= iTile*bdx*bdy+otid;
+/*	unsigned int stid		= (r * gdx * bdx + c)			+		// dentro la 1° tile		0
+			  	  	  	  	  (bdx - 0) * (iTile % gdx)		+		// itile in orizzontale		0
+			  	  	  	  	  (iTile / gdx) * (bdy-0) * gdx * bdx;	// itile in verticale		42
 */
 	unsigned int ex_tid		= c+1 + (r+1)*(bdx+2);
 
-	if (iTile<gridDim.x*gridDim.y)
+	if (iTile<gdx*gdy)
 	{
+		// initialize with maximum value:
+		lab_mat_sh[ex_tid] 		= fill_val;
+
 /*
 		// initialize with maximum value:
 		lab_mat_sh[ex_tid] 						= fill_val;
@@ -430,8 +621,8 @@ __global__ void intra_tile_labeling_opt(const unsigned char *urban,unsigned int 
 		}
 		if(r<bdy)
 		{
-			lab_mat_sh[r+1] 					= fill_val;
-			lab_mat_sh[(bdx+2)*(r+1)+bdx+1] 	= fill_val;
+			lab_mat_sh[(r+1)*(bdx+2)]			= fill_val;
+			lab_mat_sh[(r+1)*(bdx+2)+bdx+1] 	= fill_val;
 		}
 		//****
 */
@@ -447,11 +638,13 @@ __global__ void intra_tile_labeling_opt(const unsigned char *urban,unsigned int 
 		lab_mat_sh[ ex_tid + (bdx+2) 	+1 ] = fill_val;
 		__syncthreads();
 */
+
 		// use per-thread memory facility:
 		urban_loc 	 			= urban[itid];//(unsigned char)lab_mat_sh;
 		// load binary objects:
-		lab_mat_sh[ex_tid] 		= urban_loc; /*if( urban_loc!=Vb )*/
+		if( urban_loc==Vo ) lab_mat_sh[ex_tid] = urban_loc; /*if( urban_loc!=Vb )*/
 		__syncthreads();
+
 		neigh_loc[0] 			= lab_mat_sh[ ex_tid - (bdx+2) 	-1 ];
 		neigh_loc[1] 			= lab_mat_sh[ ex_tid - (bdx+2) 	+0 ];
 		neigh_loc[2] 			= lab_mat_sh[ ex_tid - (bdx+2) 	+1 ];
@@ -463,22 +656,22 @@ __global__ void intra_tile_labeling_opt(const unsigned char *urban,unsigned int 
 
 		// load global unique index:
 		newLabel 				= ttid;
-		lab_mat_sh[ex_tid] = newLabel; /*if( urban_loc!=Vb )*/
+		if( urban_loc==Vo ) lab_mat_sh[ex_tid] = newLabel; /*if( urban_loc!=Vb )*/
 		while( 1 ){
 			found[0] 			= false;
 			oldLabel 			= newLabel;
 			__syncthreads();
 
 			if(urban_loc != Vb){
-				if(neigh_loc[0]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2) -1 ]);
-				if(neigh_loc[1]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2) +0 ]);
-				if(neigh_loc[2]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2) +1 ]);
-				if(neigh_loc[3]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid 		  -1 ]);
-				if(neigh_loc[4]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid			  +1 ]);
-				if(neigh_loc[5]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2) -1 ]);
-				if(neigh_loc[6]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2) +0 ]);
-				if(neigh_loc[7]==urban_loc)	newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2) +1 ]);
-/*				newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2) -1 ]);
+/*				if(neigh_loc[0]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2)	-1 ]);
+				if(neigh_loc[1]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2)	+0 ]);
+				if(neigh_loc[2]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2)	+1 ]);
+				if(neigh_loc[3]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid			-1 ]);
+				if(neigh_loc[4]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid			+1 ]);
+				if(neigh_loc[5]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2)	-1 ]);
+				if(neigh_loc[6]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2)	+0 ]);
+				if(neigh_loc[7]==Vo) newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2)	+1 ]);
+*/				newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2) -1 ]);
 				newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2) +0 ]);
 				newLabel = min(newLabel, lab_mat_sh[ ex_tid - (bdx+2) +1 ]);
 				newLabel = min(newLabel, lab_mat_sh[ ex_tid 		  -1 ]);
@@ -486,14 +679,16 @@ __global__ void intra_tile_labeling_opt(const unsigned char *urban,unsigned int 
 				newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2) -1 ]);
 				newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2) +0 ]);
 				newLabel = min(newLabel, lab_mat_sh[ ex_tid + (bdx+2) +1 ]);
-*/			}	__syncthreads();
+			}
+			__syncthreads();
 
 			if(oldLabel > newLabel) {
 				atomicMin(&lab_mat_sh[ex_tid], newLabel); // if it is slow ==> write directly!
 				//lab_mat_sh[ex_tid] = newLabel;
 				//set the flag to 1 -> it is necessary to perform another iteration of the CCL solver
 				found[0] 		= true;
-			}	__syncthreads();
+			}
+			__syncthreads();
 			//if no equivalence was updated, the local solution is complete
 			if(found[0] == false) break;
 		}
@@ -501,7 +696,104 @@ __global__ void intra_tile_labeling_opt(const unsigned char *urban,unsigned int 
 		/*  To linearize write using ttid.
 		 * 	To leave same matrix configuration as input urban use stid instead!!
 		 */
-		if( urban_loc!=Vb ) lab_mat[ttid] = lab_mat_sh[ex_tid];
+		if( urban_loc==Vo ) lab_mat[ttid] = lab_mat_sh[ex_tid];
+		__syncthreads();
+	}
+}
+__global__ void intra_tile_labeling_opt2(const unsigned char *urban,unsigned int NC,unsigned int *lab_mat)
+{
+	extern __shared__ unsigned int  lab_mat_sh[];
+	__shared__ bool found;
+
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
+	unsigned int nTiles		= gdx * gdy;
+
+	unsigned char urb_cc_loc;
+	unsigned int lab_neigh_loc[8];
+	unsigned int fill_val 	= 0xFFFFFFFFFFFFFFFF;
+	unsigned int newLabel;
+	unsigned int oldLabel;
+
+	unsigned int otid		= bdx * r + c;
+	unsigned int itid		= (r * NC + c) 					+		// dentro la 1° tile		0
+							  (bdx - 1) * (iTile % gdx)		+		// itile in orizzontale		0
+							  (iTile / gdx) * (bdy-1) * NC;			// itile in verticale		0
+	unsigned int ttid 		= iTile*bdx*bdy+otid;
+/*	unsigned int stid		= (r * gdx * bdx + c)			+		// dentro la 1° tile		0
+			  	  	  	  	  (bdx - 0) * (iTile % gdx)		+		// itile in orizzontale		0
+			  	  	  	  	  (iTile / gdx) * (bdy-0) * gdx * bdx;	// itile in verticale		42
+*/
+	unsigned int ex_tid		= c+1 + (r+1)*(bdx+2);
+
+	unsigned int ii			= 0;
+
+	if( iTile<nTiles )
+	{
+		// initialize with maximum value:
+		lab_mat_sh[ex_tid] 						= fill_val;
+		/* **write fill_val in boundaries** */
+		if( c==0 && r==0 ){		//..:: 4x corners ::..
+			lab_mat_sh[0] 						= fill_val;
+			lab_mat_sh[bdx+1] 					= fill_val;
+			lab_mat_sh[(bdx+2)*(bdy+1)] 		= fill_val;
+			lab_mat_sh[(bdx+2)*(bdy+2) -1] 		= fill_val;
+		}
+		if( c<bdx ) {			//..:: nn+ss ::..
+			lab_mat_sh[c+1] 					= fill_val;
+			lab_mat_sh[(bdx+2)*(bdy+1)+1 +c] 	= fill_val;
+		}
+		if( r<bdy ){			//..:: ww+ee ::..
+			lab_mat_sh[(r+1)*(bdx+2)]			= fill_val;
+			lab_mat_sh[(r+1)*(bdx+2)+bdx+1] 	= fill_val;
+		}
+
+		// use per-thread memory facility:
+		urb_cc_loc 	 							= urban[itid];//(unsigned char)lab_mat_sh;
+		__syncthreads();
+
+		// load global unique index:
+		if( urb_cc_loc==Vo ) lab_mat_sh[ex_tid] = ttid; /*if( urb_cc_loc!=Vb )*/
+		__syncthreads();
+
+		// if no equivalence was updated, the local solution is complete
+		newLabel 					= lab_mat_sh[ex_tid];
+		found						= true;
+		while( found==true ){
+			found 					= false;
+			oldLabel 				= newLabel;
+			// for each thread load the 8-adjacent pixels
+			lab_neigh_loc[0] 		= lab_mat_sh[ ex_tid - (bdx+2) 	-1 ];
+			lab_neigh_loc[1] 		= lab_mat_sh[ ex_tid - (bdx+2) 	+0 ];
+			lab_neigh_loc[2] 		= lab_mat_sh[ ex_tid - (bdx+2) 	+1 ];
+			lab_neigh_loc[3] 		= lab_mat_sh[ ex_tid 			-1 ];
+			lab_neigh_loc[4] 		= lab_mat_sh[ ex_tid			+1 ];
+			lab_neigh_loc[5] 		= lab_mat_sh[ ex_tid + (bdx+2) 	-1 ];
+			lab_neigh_loc[6] 		= lab_mat_sh[ ex_tid + (bdx+2) 	+0 ];
+			lab_neigh_loc[7] 		= lab_mat_sh[ ex_tid + (bdx+2) 	+1 ];
+
+			for(ii=0;ii<8;ii++){
+				newLabel 			= fminf( newLabel, lab_neigh_loc[ii] );
+			}
+			//atomicMin(&lab_mat_sh[ex_tid], newLabel);
+			if( urb_cc_loc==Vo ) lab_mat_sh[ex_tid] = newLabel;
+
+			//set the flag to 1 -> it is necessary to perform another iteration of the CCL solver
+			if(oldLabel > newLabel){ found = true; }
+			__syncthreads();
+		}
+
+		/*  To linearize write using ttid.
+		 * 	To leave same matrix configuration as input urban use stid instead!!
+		 */
+		if( urb_cc_loc==Vo ) lab_mat[ttid] = lab_mat_sh[ex_tid];
 		__syncthreads();
 	}
 }
@@ -510,26 +802,41 @@ template <unsigned int NTHREADSX>
 __global__ void stitching_tiles(	unsigned int *lab_mat,
 									const unsigned int tiledimX,
 									const unsigned int tiledimY		)
-{	// THREADS:
-	unsigned int c 		= threadIdx.x;
+{
+	/*
+	 * 	NOTE:
+	 * 		> xx_yy is the tile xx and border yy (e.g. nn_ss is tile at north and border at south).
+	 */
+
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
 
 	// TILES:
-	int nTiles			= gridDim.x * gridDim.y;
-	int iTile			= gridDim.x * blockIdx.y + blockIdx.x;								// cc tile
-	int nn_tile			= (iTile < gridDim.x)?-1:(iTile - gridDim.x);						// nn tile of cc tile
-	int ww_tile			= ((iTile % gridDim.x)==0)?-1:iTile-1;								// ww tile of cc tile
+	int nTiles			= gdx * gdy;
+	int nn_tile			= (iTile < gdx)?-1:(iTile - gdx);		// nn tile of cc tile
+	int ww_tile			= ((iTile % gdx)==0)?-1:iTile-1;		// ww tile of cc tile
 
 	// SIDES:
-	int c_nn_tid		=	c 											+					// (2) within-tile
-							tiledimX*tiledimY * iTile;										// (1) horizontal offset
-	int nn_tid			= 	c 											+					// (2) within-tile
-							tiledimX*(tiledimY-1) + tiledimX*tiledimY * nn_tile;			// (1) horizontal offset
-	int c_ww_tid		=	c*tiledimX 									+					// (2) within-tile
-							tiledimX*tiledimY * iTile;										// (1) horizontal offset
-	int ww_tid			= 	(c+1)*tiledimX-1 							+					// (2) within-tile
-							tiledimX*tiledimY * ww_tile;									// (1) horizontal offset
+	int c_nn_tid		=	c 								+	// (2) within-tile
+							tiledimX*tiledimY * iTile;			// (1) horizontal offset
 
-	// SHARED:
+	int nn_tid			= 	c +	tiledimX*(tiledimY-1) 		+	// (2) within-tile
+							tiledimX*tiledimY * nn_tile;		// (1) horizontal offset
+
+	int c_ww_tid		=	c*tiledimX 						+	// (2) within-tile
+							tiledimX*tiledimY * iTile;			// (1) horizontal offset
+
+	int ww_tid			= 	(c+1)*tiledimX-1 				+	// (2) within-tile
+							tiledimX*tiledimY * ww_tile;		// (1) horizontal offset
+
+	// SHARED: "tile_border" ==> cc_nn is border North of Center tile
 	__shared__ unsigned int cc_nn[NTHREADSX];
 	__shared__ unsigned int nn_ss[NTHREADSX];
 	__shared__ unsigned int cc_ww[NTHREADSX];
@@ -552,7 +859,7 @@ __global__ void stitching_tiles(	unsigned int *lab_mat,
 			/*
 			 * 		(2) **recursion applying split-rules**
 			 */
-			__old[ c ] = atomicMin( &lab_mat[ cc_nn[c] ], nn_ss[ c ] );
+			__old[ c ] = atomicMin( &lab_mat[ cc_nn[c] ], nn_ss[ c ] ); // write the current min val where the index cc_nn[c] is in lab_mat.
 			while( __old[ c ] != nn_ss[c] )
 			{
 				_min_[ c ] 	= ( (nn_ss[c]) < (__old[c]) )? nn_ss[c] : __old[c];
@@ -594,35 +901,43 @@ template <unsigned int NTHREADSX>
 __global__ void root_equivalence(	unsigned int *lab_mat,
 									const unsigned int tiledimX,
 									const unsigned int tiledimY		)
-{	// THREADS:
-	unsigned int c 		= threadIdx.x;
+{
+
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
 
 	// TILES:
-	int nTiles			= gridDim.x * gridDim.y;
-	int iTile			= gridDim.x * blockIdx.y + blockIdx.x;								// cc tile
-	int nn_tile			= (iTile < gridDim.x)?-1:(iTile - gridDim.x);						// nn tile of cc tile
-	int ww_tile			= ((iTile % gridDim.x)==0)?-1:iTile-1;								// ww tile of cc tile
-	int ss_tile			= (iTile >= gridDim.x*(gridDim.y-1))?-1:(iTile + gridDim.x);		// tile index of ss
-	int ee_tile			= ((iTile % gridDim.x)==gridDim.x-1)?-1:iTile+1;					// tile index of ee
+	int nTiles			= gdx * gdy;
+	int nn_tile			= (iTile < gdx)?-1:(iTile - gdx);			// nn tile of cc tile
+	int ww_tile			= ((iTile % gdx)==0)?-1:iTile-1;			// ww tile of cc tile
+	int ss_tile			= (iTile >= gdx*(gdy-1))?-1:(iTile + gdx);	// tile index of ss
+	int ee_tile			= ((iTile % gdx)==gdx-1)?-1:iTile+1;		// tile index of ee
 
 	// SIDES:
-	int c_nn_tid		=	c 											+					// (2) within-tile
-							tiledimX*tiledimY * iTile;										// (1) horizontal offset
-	int nn_tid			= 	c + tiledimX*(tiledimY-1)					+					// (2) within-tile
-							tiledimX*tiledimY * nn_tile;									// (1) horizontal offset
-	int c_ww_tid		=	c*tiledimX 									+					// (2) within-tile
-							tiledimX*tiledimY * iTile;										// (1) horizontal offset
-	int ww_tid			= 	(c+1)*tiledimX-1 							+					// (2) within-tile
-							tiledimX*tiledimY * ww_tile;									// (1) horizontal offset
+	int c_nn_tid		=	c 								+		// (2) within-tile
+							tiledimX*tiledimY * iTile;				// (1) horizontal offset
+	int nn_tid			= 	c + tiledimX*(tiledimY-1)		+		// (2) within-tile
+							tiledimX*tiledimY * nn_tile;			// (1) horizontal offset
+	int c_ww_tid		=	c*tiledimX 						+		// (2) within-tile
+							tiledimX*tiledimY * iTile;				// (1) horizontal offset
+	int ww_tid			= 	(c+1)*tiledimX-1 				+		// (2) within-tile
+							tiledimX*tiledimY * ww_tile;			// (1) horizontal offset
 
-	int c_ss_tid		=	c + tiledimX*(tiledimY-1)					+					// (2) within-tile
-							tiledimX*tiledimY * iTile;										// (1) horizontal offset
-	int ss_tid			= 	c											+					// (2) within-tile
-							tiledimX*tiledimY * ss_tile;									// (1) horizontal offset
-	int c_ee_tid		=	(c+1)*tiledimX-1							+					// (2) within-tile
-							tiledimX*tiledimY * iTile;										// (1) horizontal offset
-	int ee_tid			= 	c*tiledimX 									+					// (2) within-tile
-							tiledimX*tiledimY * ee_tile;									// (1) horizontal offset
+	int c_ss_tid		=	c + tiledimX*(tiledimY-1)		+		// (2) within-tile
+							tiledimX*tiledimY * iTile;				// (1) horizontal offset
+	int ss_tid			= 	c								+		// (2) within-tile
+							tiledimX*tiledimY * ss_tile;			// (1) horizontal offset
+	int c_ee_tid		=	(c+1)*tiledimX-1				+		// (2) within-tile
+							tiledimX*tiledimY * iTile;				// (1) horizontal offset
+	int ee_tid			= 	c*tiledimX 						+		// (2) within-tile
+							tiledimX*tiledimY * ee_tile;			// (1) horizontal offset
 
 	// SHARED:
 	__shared__ unsigned int cc_nn[NTHREADSX];
@@ -642,7 +957,7 @@ __global__ void root_equivalence(	unsigned int *lab_mat,
 			 * 		(1) **list** { cc_nn(i), nn_ss(i) }
 			 */
 			cc_nn[ c ]		= lab_mat[ c_nn_tid ];
-			nn_ss[ c ] 		= lab_mat[ nn_tid ];
+			nn_ss[ c ] 		= lab_mat[ nn_tid ]; // --> DELETE, because nn_cc = cc_nn after!!
 			__syncthreads();
 
 			/*
@@ -763,19 +1078,27 @@ __global__ void intra_tile_re_label(unsigned int NC,unsigned int *lab_mat)
 	unsigned int c 			= threadIdx.x;
 	unsigned int bdx		= blockDim.x;
 	unsigned int bdy		= blockDim.y;
-	unsigned int iTile		= gridDim.x * blockIdx.y + blockIdx.x;
-	unsigned int otid		= blockDim.x * r + c;
-	unsigned int itid		= (r * NC + c) 								+					// dentro la 1° tile		0
-							  (blockDim.x - 1) * (iTile % gridDim.x)	+					// itile in orizzontale		0
-							  (iTile / gridDim.x) * (blockDim.y-1) * NC;					// itile in verticale		0
-	unsigned int ttid 		= iTile*blockDim.x*blockDim.y+otid;
-	unsigned int stid		= (r * gridDim.x * blockDim.x + c) 			+					// dentro la 1° tile		0
-			  	  	  	  	  (blockDim.x - 0) * (iTile % gridDim.x)	+					// itile in orizzontale		0
-			  	  	  	  	  (iTile / gridDim.x) * (blockDim.y-0) * gridDim.x * blockDim.x;// itile in verticale		42
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int iTile		= gdx * biy + bix;
 
-	if (iTile<gridDim.x*gridDim.y)
+	unsigned int otid		= bdx * r + c;
+	unsigned int itid		= (r * NC + c) 						+	// dentro la 1° tile		0
+							  (bdx - 1) * (iTile % gdx)			+	// itile in orizzontale		0
+							  (iTile / gdx) * (bdy-1) * NC;			// itile in verticale		0
+	unsigned int ttid 		= iTile*bdx*bdy+otid;
+	unsigned int stid		= (r * gdx * bdx + c) 		+			// dentro la 1° tile		0
+			  	  	  	  	  (bdx - 0) * (iTile % gdx)			+	// itile in orizzontale		0
+			  	  	  	  	  (iTile / gdx) * (bdy-0) * gdx * bdx;	// itile in verticale		42
+
+	if (iTile<gdx*gdy)
 	{
-		if  (lab_mat[ttid]!=0)  lab_mat[ttid]=lab_mat[lab_mat[ttid]];
+		// try to write a sequence of IDs starting from 1 to N found labels!!
+		// ...some code...
+
+		if  (lab_mat[ttid]!=Vb)  lab_mat[ttid]=lab_mat[lab_mat[ttid]];
 		//if  (urban[itid]==Vo)  urban[itid]=lab_mat[lab_mat[ttid]];
 	}
 }
@@ -783,24 +1106,37 @@ __global__ void intra_tile_re_label(unsigned int NC,unsigned int *lab_mat)
 int main(int argc, char **argv)
 {
 	// INPUTS
-	unsigned int tiledimX 	= atoi( argv[1] );
-	unsigned int tiledimY 	= atoi( argv[2] );
-	unsigned int NC1 		= atoi( argv[3] );	// passed by JAI
-	unsigned int NR1 		= atoi( argv[4] );	// passed by JAI
-	const unsigned int NTHREADSX = 30;			// how to let it be variable.
-	printf("NTHREADSX:\t%d\n\n",NTHREADSX);
+	unsigned int tiledimX 	= atoi( argv[1] );	// tile dim in X
+	unsigned int tiledimY 	= atoi( argv[2] );	// tile dim in Y
+	unsigned int NC1 		= atoi( argv[3] );	// ncols
+	unsigned int NR1 		= atoi( argv[4] );	// nrows
+	unsigned int printme	= atoi( argv[5] );	// nrows
+
+	const unsigned int NTHREADSX = 32;			// how to let it be variable.
+
+	if( NTHREADSX!=tiledimX ){
+		fprintf(stderr, "Error: NTHREADSX(=%d) <> tiledimX(=%d)!\n", NTHREADSX,tiledimX);
+		printf("\t[modify it according to tiledimX(=%d) (which should be equal to tiledimY(=%d)!!]\n\n",tiledimX,tiledimY);
+		exit(EXIT_FAILURE);
+	}
+
+	// count the number of kernels that must print their LAB-MAT:
+	unsigned int count_print=0;
 
 	// MANIPULATION:
 	// X dir
 	unsigned int ntilesX 	= ceil( (double)(NC1+2-1) / (double)(tiledimX-1)  );
-	unsigned int NC 		= ntilesX*(tiledimX-1) +1;
+	unsigned int NC 		= ntilesX*(tiledimX-1) +1;// number of columns 	of URBAN with 1-pixel-widht zero perimeter
 	// Y dir
 	unsigned int ntilesY	= ceil( (double)(NR1+2-1) / (double)(tiledimY-1)  );
-	unsigned int NR 		= ntilesY*(tiledimY-1) +1;
-
+	unsigned int NR 		= ntilesY*(tiledimY-1) +1;// number of rows		of URBAN with 1-pixel-widht zero perimeter
+/*	printf("nTiles.X: %d\nnTiles.Y: %d\n",ntilesX,ntilesY);
+	printf("NR:       %d\nNC:       %d\n",NR,NC);
+	printf("tileDim.X: %d\ntileDim.Y: %d\n\n",tiledimX,tiledimY);
+*/
 	// DECLARATIONS:
 	//	Error code to check return values for CUDA calls
-	cudaError_t cudaError 	= cudaSuccess;
+	cudaError_t cudaLastErr = cudaSuccess;
 
 	// size of arrays
 	size_t sizeChar  		= NC*NR * sizeof(unsigned char);
@@ -808,80 +1144,161 @@ int main(int argc, char **argv)
 	// clocks:
 	clock_t start_t, end_t;
 
-	//	urban_cpu
+	/*
+		cudaStream_t stream[2];
+		cudaStreamCreate(&stream[0]);
+		cudaStreamCreate(&stream[1]);
+	*/
+
+
+
+	/* ....::: ALLOCATION :::.... */
+
+	// -1- urban_cpu
 	unsigned char *urban_cpu;
 	cudaMallocHost(&urban_cpu,sizeChar);
-	read_mat(urban_cpu, NR, NC, "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ALL.txt");
-
-	start_t = clock();
-/*
-	cudaStream_t stream[2];
-	cudaStreamCreate(&stream[0]);
-	cudaStreamCreate(&stream[1]);
-*/
-	//	urban_gpu -- stream[0]
+	read_urbmat(urban_cpu, NR, NC, ALL_txt);
+	// -2- urban_gpu -- stream[0]
 	unsigned char *urban_gpu;
-	cudaError = cudaMalloc( (void **)&urban_gpu, sizeChar );
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to allocate device array urban_gpu (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
-	//cudaError = cudaMemsetAsync( urban_gpu,0, sizeChar, stream[0] );
-	cudaError = cudaMemset( urban_gpu,0, sizeChar );
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to set ZEROS in urban_gpu array on device (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
-	//cudaError = cudaMemcpyAsync( urban_gpu,urban_cpu,	sizeChar,cudaMemcpyHostToDevice, stream[0] );
-	cudaError = cudaMemcpy( urban_gpu,urban_cpu,	sizeChar,cudaMemcpyHostToDevice );
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to copy array urban_cpu from host to device urban_gpu (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
-
-	//	lab_mat_gpu  -- stream[1]
-	unsigned int  *lab_mat_gpu;
-	cudaError = cudaMalloc( (void **)&lab_mat_gpu, sizeUintL );
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to allocate device array lab_mat_gpu (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
-	//cudaError = cudaMemsetAsync( lab_mat_gpu,0, sizeUintL, stream[0] );
-	cudaError = cudaMemset( lab_mat_gpu,0, sizeUintL );
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to set ZEROS in lab_mat_gpu array on device (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
-
-	//	lab_mat_cpu
+	cudaLastErr = cudaMalloc( (void **)&urban_gpu, sizeChar );
+	if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to allocate device array urban_gpu (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	//cudaLastErr = cudaMemsetAsync( urban_gpu,0, sizeChar, stream[0] );
+	cudaLastErr = cudaMemset( urban_gpu,0, sizeChar );
+	if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to set ZEROS in urban_gpu array on device (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	//cudaLastErr = cudaMemcpyAsync( urban_gpu,urban_cpu,	sizeChar,cudaMemcpyHostToDevice, stream[0] );
+	cudaLastErr = cudaMemcpy( urban_gpu,urban_cpu,	sizeChar,cudaMemcpyHostToDevice );
+	if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to copy array urban_cpu from host to device urban_gpu (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	// -3- lab_mat_cpu
 	unsigned int  *lab_mat_cpu;
 	cudaMallocHost(&lab_mat_cpu,sizeUintL);
+	// -4- lab_mat_gpu  -- stream[1]
+	unsigned int  *lab_mat_gpu;
+	cudaLastErr = cudaMalloc( (void **)&lab_mat_gpu, sizeUintL );
+	if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to allocate device array lab_mat_gpu (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	//cudaLastErr = cudaMemsetAsync( lab_mat_gpu,0, sizeUintL, stream[0] );
+	cudaLastErr = cudaMemset( lab_mat_gpu,0, sizeUintL );
+	if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to set ZEROS in lab_mat_gpu array on device (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
 
-	// KERNEL INVOCATION: intra-tile labeling
-	dim3 block(tiledimX,tiledimY);
-	dim3 grid(ntilesX,ntilesY);
-	int sh_mem 	= (tiledimX*tiledimY)*(sizeof(unsigned int)); // +sizeof(unsigned char)
+	/* ....::: ALLOCATION :::.... */
+
+
+
+	start_t = clock();
+
+/*
+ *		KERNELS INVOCATION
+ *
+ *			*************************
+ *			-1- linearize_tiles			|\
+ *			-2- intra_tile_labeling		| --> 1st Stage
+ *
+ *			-3- stitching_tiles			|\
+ *			-4- root_equivalence		| --> 2nd Stage
+ *
+ *			-5- intra_tile_re_label		| --> 3rd Stage
+ *			*************************
+ */
+
+	/* ....::: [1/3 stage] INTRA-TILE :::.... */
+
+	dim3 	block(tiledimX,tiledimY,1);
+	dim3 	grid(ntilesX,ntilesY,1);
+	int 	sh_mem	= (tiledimX*tiledimY)*(sizeof(unsigned int)); // +sizeof(unsigned char)
+	int 	sh_mem_2= ((tiledimX+2)*(tiledimY+2))*(sizeof(unsigned int)); // +sizeof(unsigned char)
+
+/*	linearize_tiles<<<grid,block,sh_mem>>>(urban_gpu,NC);
+	cudaLastErr		= cudaGetLastError();
+	if (cudaLastErr != cudaSuccess){ printf ("ERROR {linearize_tiles} -- %s\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+*/	/* INTERMEDIATE CHECK [activate/deactivate]*/
+/*	printf("  -0- %30s\n","print original");
+	sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/-0-urban_cpu-read_from_HDD.txt");
+	write_urbmat_matlab(urban_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
+	printf("  -1- %30s\n","linearize_tiles");
+	cudaLastErr 	= cudaMemcpy(urban_cpu,urban_gpu,	sizeChar,cudaMemcpyDeviceToHost);
+	if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to allocate copy array urban_gpu from device to host (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/-1-urban_cpu-linearize_tiles.txt");
+	write_urbmat_tiled(urban_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
+*/
 	intra_tile_labeling<<<grid,block,sh_mem>>>(urban_gpu,NC,lab_mat_gpu);
-	int sh_mem_2= ((tiledimX+2)*(tiledimY+2))*(sizeof(unsigned int)); // +sizeof(unsigned char)
 //	intra_tile_labeling_opt<<<grid,block,sh_mem_2>>>(urban_gpu,NC,lab_mat_gpu);
-	cudaError_t cudaLastErr = cudaGetLastError(); //cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost)
-	if (cudaLastErr != cudaSuccess){ printf ("ERROR {intra_tile_labeling_opt} -- %s\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
-	//checkCudaErrors( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost) );
-/*	cudaError = cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost);
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to allocate copy array lab_mat_gpu from device to host (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
-	sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/lab_mat_cpu-intra_tile_labeling.txt");
-	write_linmat_tiled(lab_mat_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
-*/
-	dim3 block_2(tiledimX,1,1);
-	dim3 grid_2(ntilesX,ntilesY,1);
+//	intra_tile_labeling_opt2<<<grid,block,sh_mem_2>>>(urban_gpu,NC,lab_mat_gpu);
+	cudaLastErr 	= cudaGetLastError();
+	if (cudaLastErr != cudaSuccess){ printf ("ERROR {intra_tile_labeling} -- %s\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		count_print++;
+		printf("  -%d- %30s\n",count_print,"intra_tile_labeling");
+		cudaLastErr 	= cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost);
+		if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to allocate copy array lab_mat_gpu from device to host (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+		sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/-2-lab_mat_cpu-intra_tile_labeling.txt");
+		write_labmat_tiled(lab_mat_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
+	}
+	/* ....::: [1/3 stage] :::.... */
+
+
+
+
+	/* ....::: [2/3 stage] STITCHING :::.... */
+
+	dim3 	block_2(tiledimX,1,1);
+	dim3 	grid_2(ntilesX,ntilesY,1);
+
 	stitching_tiles<NTHREADSX><<<grid_2,block_2>>>(lab_mat_gpu,tiledimX,tiledimY);
+	cudaLastErr 	= cudaGetLastError();
+	if (cudaLastErr != cudaSuccess){ printf ("ERROR {stitching_tiles} -- %s\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		count_print++;
+		printf("  -%d- %30s\n",count_print,"stitching_tiles");
+		cudaLastErr 	= cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost);
+		if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to allocate copy array lab_mat_gpu from device to host (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+		sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/-3-lab_mat_cpu-stitching_tiles.txt");
+		write_labmat_tiled(lab_mat_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
+	}
+
 	root_equivalence<NTHREADSX><<<grid_2,block_2>>>(lab_mat_gpu,tiledimX,tiledimY);
-	// SAVE
-/*	cudaError = cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost);
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to allocate copy array lab_mat_gpu from device to host (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
-	sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/lab_mat_cpu-root_equivalence.txt");
-	write_linmat_tiled(lab_mat_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
-*/
+	cudaLastErr 	= cudaGetLastError();
+	if (cudaLastErr != cudaSuccess){ printf ("ERROR {root_equivalence} -- %s\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		count_print++;
+		printf("  -%d- %30s\n",count_print,"stitching_tiles");
+		cudaLastErr 	= cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost);
+		if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to allocate copy array lab_mat_gpu from device to host (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+		sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/-4-lab_mat_cpu-root_equivalence.txt");
+		write_labmat_tiled(lab_mat_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
+	}
+	/* ....::: [2/3 stage] :::.... */
 
-	// final labeling:
+
+
+
+	/* ....::: [3/3 stage] INTRA-TILE #2 :::.... */
+
 	intra_tile_re_label<<<grid,block,sh_mem>>>(NC,lab_mat_gpu);
-
-	// lab_mat_cpu:
-	//cudaError = cudaMemcpyAsync( lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost, stream[0] );
-	cudaError = cudaMemcpy( lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost );
-	if (cudaError != cudaSuccess){ fprintf(stderr, "Failed to copy array lab_mat_gpu from device to host lab_mat_cpu (error code %s)!\n", cudaGetErrorString(cudaError)); exit(EXIT_FAILURE); }
+	cudaLastErr 	= cudaGetLastError();
+	if (cudaLastErr != cudaSuccess){ printf ("ERROR {intra_tile_re_label} -- %s\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	// D2H --> [lab_mat_cpu]
+	//cudaLastErr = cudaMemcpyAsync( lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost, stream[0] );
+	cudaLastErr 	= cudaMemcpy( lab_mat_cpu,lab_mat_gpu,	sizeUintL,cudaMemcpyDeviceToHost );
+	if (cudaLastErr != cudaSuccess){ fprintf(stderr, "Failed to copy array lab_mat_gpu from device to host lab_mat_cpu (error code %s)!\n", cudaGetErrorString(cudaLastErr)); exit(EXIT_FAILURE); }
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		count_print++;
+		printf("  -%d- %30s\n\n",count_print,"intra_tile_re_label");
+		sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/-5-lab_mat_cpu-intra_tile_re_label.txt");
+		write_labmat_tiled(lab_mat_cpu, tiledimY, tiledimX, ntilesX, ntilesY, buffer);
+	}
+	/* ....::: [3/3 stage] :::.... */
 
 	end_t = clock();
+
+	/* DO NOT EDIT THE FOLLOWING PRINT (it's used in MatLab to catch the elapsed time!)*/
 	printf("Total time: %f [msec]\n", (double)(end_t - start_t) / CLOCKS_PER_SEC * 1000 );
 
 	// SAVE lab_mat to file and compare with MatLab
-	sprintf(buffer,"/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/CUDA-code.txt");
-	write_linmat_matlab(lab_mat_cpu, tiledimX, tiledimY, ntilesX, ntilesY, buffer);
+	sprintf(buffer,Lcuda);
+	write_labmat_matlab(lab_mat_cpu, tiledimX, tiledimY, ntilesX, ntilesY, buffer);
 
 	// FREE MEMORY:
 	cudaFreeHost(lab_mat_cpu);
@@ -891,6 +1308,8 @@ int main(int argc, char **argv)
 /*	cudaStreamDestroy( stream[0] );
 	cudaStreamDestroy( stream[1] );
 */
+
+	//printf("\nFinished!!\n");
 	// RETURN:
 	return 0;
 }
