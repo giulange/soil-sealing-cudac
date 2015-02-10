@@ -24,8 +24,8 @@ tiledimX    = 32;  % 512 - 32 - 30
 tiledimY    = 32;  % 2   - 32 - 30
 
 % variable:
-ntilesX     = 30;
-ntilesY     = 32;
+ntilesX     = 130;
+ntilesY     = 132;
 threshold   = 0.7; % to set the density of the image!
 
 % consequence:
@@ -47,6 +47,11 @@ A                   = rand(NR,NC);
 A(A>=(1-threshold)) = 1;
 A(A<(1-threshold))  = 0;
 % A               = logical(A);
+
+% modification to test for irregular NC*NR
+% NC = NC-2;
+% NR = NR-3;
+% A = A(1:end-3,1:end-2);
 
 %% save binary image
 
