@@ -21,6 +21,8 @@ DESCRIPTION:
 		> xx are skipped pixels.
 	Therefore the mask has 4 active pixels with(out) object pixels (that is foreground pixels).
 
+	In lab_mat pixels are ordered by blocks (first 1024 pixels by block[0], and so forth).
+
 */
 
 //	INCLUDES
@@ -52,13 +54,13 @@ DESCRIPTION:
 #define cc_pol(cc,rr,bdx)	lab_mat_sh[	(cc+0)	+	(rr+0)	*(bdx)	] // O: scan value at current [r,c] which is shifted by [1,1] in O
 
 __device__ unsigned int fBDX(unsigned int WIDTH){
-	return (blockIdx.x < gridDim.x-1) ? blockDim.x : WIDTH - (gridDim.x-1)*blockDim.x;
+	return (blockIdx.x < gridDim.x-1) ? blockDim.x : WIDTH  - (gridDim.x-1)*blockDim.x;// DO NOT MODIFY !!!!
 }
 __device__ unsigned int fBDY(unsigned int HEIGHT){ // NOTE: I'm assuming that blockDim.x = blockDim.y
-	return (blockIdx.y < gridDim.y-1) ? blockDim.x : HEIGHT - (gridDim.y-1)*blockDim.x;
+	return (blockIdx.y < gridDim.y-1) ? blockDim.x : HEIGHT - (gridDim.y-1)*blockDim.x;// DO NOT MODIFY !!!!
 }
 __device__ unsigned int fBDY_cross(unsigned int HEIGHT){ // NOTE: I'm assuming that blockDim.x = blockDim.y
-	return (blockIdx.y < gridDim.y-1) ? blockDim.x : HEIGHT - (gridDim.y-1)*blockDim.x;
+	return (blockIdx.y < gridDim.y-1) ? blockDim.x : HEIGHT - (gridDim.y-1)*blockDim.x;// DO NOT MODIFY !!!!
 }
 
 
@@ -73,14 +75,36 @@ __device__ unsigned int fBDY_cross(unsigned int HEIGHT){ // NOTE: I'm assuming t
 /*	+++++DEFINEs+++++	*/
 
 // GLOBAL VARIABLES
-#define			Vo			1	// object value
-#define			Vb			0	// object value
-char			buffer[255];
-const char 		*BASE_PATH	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing";
+#define						Vo							1		// object value
+#define						Vb							0		// object value
+const bool					relabel						= true; // decide if relabel objects from 1 to N
+static const unsigned int 	threads 					= 512;	//[reduce6] No of threads working in single block
+static const unsigned int 	blocks 						= 64;	//[reduce6] No of blocks working in grid (this gives also the size of output Perimeter, to be summed outside CUDA)
+const char 					*BASE_PATH					= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing";
+char						buffer[255];
 // I/-
-//const char 		*FIL_BIN	= "/home/giuliano/git/cuda/fragmentation/data/BIN.tif";
 //const char 		*FIL_BIN	= "/home/giuliano/git/cuda/fragmentation/data/BIN-cropped.tif";
-const char		*FIL_BIN	= "/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped.tif";
+//const char		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/BIN.tif";
+// size=[300, 204]
+//const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/ROI.tif";
+//const char 		*FIL_BIN 		= "/home/giuliano/git/cuda/fragmentation/data/BIN.tif";
+// size=[9152, 9002]
+//const char 		*FIL_ROI 	= "/home/giuliano/git/cuda/fragmentation/data/lodi1954_roi.tif";
+//const char 		*FIL_BIN 	= "/home/giuliano/git/cuda/fragmentation/data/lodi1954.tif";
+// size=[9152, 9002]
+//const char 		*FIL_ROI        = "/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954_roi.tif";
+//const char		*FIL_BIN        = "/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954.tif";
+// size=[15958, 15366]
+//const char 		*FIL_ROI		= "/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped_roi.tif";
+//const char 		*FIL_BIN		= "/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped.tif";
+// size=[15001, 12001]
+//const char		*FIL_ROI		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2_roi.tif";
+//const char		*FIL_BIN		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2.tif";
+// size=[8000, 8000]
+const char 		*FIL_ROI		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels_roi.tif";
+const char 		*FIL_BIN		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels.tif";
+
+
 // -/O
 const char		*Lcuda		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/CUDA-code.txt";
 const char 		*FIL_LAB 	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/LAB-MAT-cuda.tif";
@@ -89,7 +113,11 @@ const char 		*kern_1 	= "intra_tile_labeling";
 const char 		*kern_2 	= "stitching_tiles";
 const char 		*kern_3 	= "root_equivalence";
 const char 		*kern_4 	= "intra_tile_re_label";
+const char 		*kern_4_a 	= "count_labels";
+const char 		*kern_4_b 	= "labels__1_to_N";
+const char 		*kern_4_c 	= "intratile_relabel_1toN";
 const char 		*kern_5 	= "del_duplicated_lines";
+const char 		*kern_6 	= "reduce6_hist";
 
 //---------------------------- FUNCTIONS PROTOTYPES
 //		** I/O **
@@ -107,7 +135,47 @@ __global__ void root_equivalence( unsigned int *,const unsigned int,const unsign
 __global__ void intra_tile_re_label(unsigned int,unsigned int *);
 //---------------------------- FUNCTIONS PROTOTYPES
 
-void read_urbmat(unsigned char *urban, unsigned int nrows, unsigned int ncols, const char *filename)
+// is Power two?
+bool isPow2(unsigned int x){ return ((x&(x-1))==0); }
+
+// Utility class used to avoid linker errors with extern
+// unsized shared memory arrays with templated type
+template<class T>
+struct SharedMemory
+{
+    __device__ inline operator       T *()
+    {
+        extern __shared__ int __smem[];
+        return (T *)__smem;
+    }
+
+    __device__ inline operator const T *() const
+    {
+        extern __shared__ int __smem[];
+        return (T *)__smem;
+    }
+};
+
+// specialize for double to avoid unaligned memory
+// access compile errors
+template<>
+struct SharedMemory<double>
+{
+    __device__ inline operator       double *()
+    {
+        extern __shared__ double __smem_d[];
+        return (double *)__smem_d;
+    }
+
+    __device__ inline operator const double *() const
+    {
+        extern __shared__ double __smem_d[];
+        return (double *)__smem_d;
+    }
+};
+
+void
+read_urbmat(unsigned char *urban, unsigned int nrows, unsigned int ncols, const char *filename)
 {
 	/*
 	 * 	This function reads the Image and stores it in RAM with a 1-pixel-width zero-padding
@@ -128,8 +196,8 @@ void read_urbmat(unsigned char *urban, unsigned int nrows, unsigned int ncols, c
 	}
 	fclose(fid);
 }
-
-void write_labmat_tiled(	unsigned int *lab_mat,
+void
+write_labmat_tiled(	unsigned int *lab_mat,
 							unsigned int bdy, unsigned int bdx,
 							unsigned int ntilesY, unsigned int ntilesX,
 							unsigned int HEIGHT, unsigned int WIDTH,
@@ -179,7 +247,8 @@ void write_labmat_tiled(	unsigned int *lab_mat,
 	}
 	fclose(fid);
 }
-void write_labmat_tiled_without_duplicated_LINES(
+void
+write_labmat_tiled_without_duplicated_LINES(
 							unsigned int *lab_mat,
 							unsigned int bdy, unsigned int bdx,
 							unsigned int ntilesY, unsigned int ntilesX,
@@ -232,7 +301,8 @@ void write_labmat_tiled_without_duplicated_LINES(
 	}
 	fclose(fid);
 }
-void write_labmat_full(unsigned int *lab_mat, unsigned int HEIGHT, unsigned int WIDTH, const char *filename)
+void
+write_labmat_full(unsigned int *lab_mat, unsigned int HEIGHT, unsigned int WIDTH, const char *filename)
 {
 	unsigned int rr,cc;
 	FILE *fid ;
@@ -251,8 +321,8 @@ void write_labmat_full(unsigned int *lab_mat, unsigned int HEIGHT, unsigned int 
 	}
 	fclose(fid);
 }
-
-void write_labmat_matlab(unsigned int *lab_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, const char *filename)
+void
+write_labmat_matlab(unsigned int *lab_mat, unsigned int nr, unsigned int nc, unsigned int ntilesX, unsigned int ntilesY, const char *filename)
 {
 	unsigned int rr,cc,itX,itY;
 	FILE *fid ;
@@ -285,7 +355,8 @@ void write_labmat_matlab(unsigned int *lab_mat, unsigned int nr, unsigned int nc
 	fclose(fid);
 }
 
-__global__ void intra_tile_labeling(const unsigned char *urban,unsigned int WIDTH,unsigned int HEIGHT,unsigned int WIDTH_e,unsigned int HEIGHT_e,unsigned int *lab_mat)
+__global__ void
+intra_tile_labeling(const unsigned char *urban,unsigned int WIDTH,unsigned int HEIGHT,unsigned int WIDTH_e,unsigned int HEIGHT_e,unsigned int *lab_mat)
 {
 	/*
 	 * 	*urban:		binary geospatial array;
@@ -379,14 +450,15 @@ __global__ void intra_tile_labeling(const unsigned char *urban,unsigned int WIDT
 		__syncthreads();
 	}
 }
-
 template <unsigned int NTHREADSX>
-__global__ void stitching_tiles(	unsigned int *lab_mat,
+__global__ void
+stitching_tiles(	unsigned int *lab_mat,
 									const unsigned int bdy,
 									const unsigned int WIDTH_e,
-									const unsigned int HEIGHT_e)
-{
-	/*
+									const unsigned int HEIGHT_e){
+	/**
+	 * 	This kernel stitches adjacent tiles working on borders.
+	 *
 	 * 	NOTE:
 	 * 		> xx_yy is the tile xx and border yy (e.g. nn_ss is tile at north and border at south).
 	 */
@@ -479,13 +551,16 @@ __global__ void stitching_tiles(	unsigned int *lab_mat,
 		__syncthreads();
 	}
 }
-
 template <unsigned int NTHREADSX>
-__global__ void root_equivalence(	unsigned int *lab_mat,
+__global__ void
+root_equivalence(	unsigned int *lab_mat,
 									const unsigned int bdy,
 									const unsigned int WIDTH_e,
-									const unsigned int HEIGHT_e		)
-{
+									const unsigned int HEIGHT_e		){
+	/**
+	 * 	This kernel finds the root ID for any key-pixel.
+	 * 	A key-pixel is a pixel in a block having lab_mat[tid]=tid.
+	 */
 
 	//unsigned int r 			= threadIdx.y;
 	unsigned int c 			= threadIdx.x;
@@ -653,9 +728,14 @@ __global__ void root_equivalence(	unsigned int *lab_mat,
 		__syncthreads();//__threadfence_system();
 	}
 }
+__global__ void
+intra_tile_re_label(unsigned int WIDTH_e, unsigned int HEIGHT_e, unsigned int *lab_mat){
+	/**
+	 * 	This kernel assign to each pixel the value of the root ID written where
+	 * 	lab_mat[tid] is equal to tid.
+	 */
 
-__global__ void intra_tile_re_label(unsigned int WIDTH_e, unsigned int HEIGHT_e, unsigned int *lab_mat)
-{
+
 	// See this link when using more then one extern __shared__ array:
 	// 		http://stackoverflow.com/questions/9187899/cuda-shared-memory-array-variable
 	//extern __shared__ unsigned char urban_sh[];
@@ -681,16 +761,225 @@ __global__ void intra_tile_re_label(unsigned int WIDTH_e, unsigned int HEIGHT_e,
 
 	if( tix<WIDTH_e && tiy<HEIGHT_e )// iTile<gdx*gdy
 	{
-		// try to write a sequence of IDs starting from 1 to N found labels!!
-		// ...some code...
-		if  (lab_mat[ttid]!=Vb)  lab_mat[ttid]=lab_mat[lab_mat[ttid]];
+		if(lab_mat[ttid]!=Vb)  lab_mat[ttid]=lab_mat[lab_mat[ttid]];
 	}
 }
+__global__ void
+count_labels( 	unsigned int WIDTH, unsigned int HEIGHT,
+				const unsigned int *lab_mat, unsigned int *bins ){
+	/**
+	 * 	This kernel counts the number of objects within each block (and stores it in bins).
+	 * 		1.\ build ones array (simple write operation)
+	 * 		2.\ count ones within ones array (reduction) --> only works with NTHREADSX=32 !!!!
+	 */
 
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+//	unsigned int gdy		= gridDim.y;
+	unsigned int big		= biy*gdx + bix;	// block index on grid!
+	unsigned int tid 		= bdx * r + c;
+	unsigned int tix		= bdx*bix + c;		// horizontal 	offset
+	unsigned int tiy		= bdy*biy + r;		// vertical 	offset
+
+//	unsigned int otid		= bdx * r + c;
+
+	unsigned int y_offset	= (WIDTH*bdy*biy);
+	unsigned int x_offset	= (bdx*fBDY(HEIGHT)*bix);
+	unsigned int blk_offset	= (fBDX(WIDTH)*r+c);
+	unsigned int ttid		= y_offset + x_offset + blk_offset;
+
+	extern __shared__ unsigned int sh_sum[];
+	//	-initialisation:
+	sh_sum[tid] = 0;									syncthreads();
+
+	if( tix<WIDTH && tiy<HEIGHT )
+	{
+		// 1.\ simple write operation
+		//	-ones:
+		if(lab_mat[ttid]==ttid) sh_sum[tid] = 1;		syncthreads();
+		//	-the lab_mat[ttid]==ttid condition is not valid for label "ZERO":
+		if(ttid==0) sh_sum[tid] = 0;
+
+		// 2.\ reduction
+		//	-compute sum:
+		if(tid<512)	sh_sum[tid] += sh_sum[tid + 512];	syncthreads();
+		if(tid<256)	sh_sum[tid] += sh_sum[tid + 256];	syncthreads();
+		if(tid<128)	sh_sum[tid] += sh_sum[tid + 128];	syncthreads();
+		if(tid<64)	sh_sum[tid] += sh_sum[tid + 64];	syncthreads();
+		if(tid<32)	sh_sum[tid] += sh_sum[tid + 32];	syncthreads();
+		if(tid<16)	sh_sum[tid] += sh_sum[tid + 16];	syncthreads();
+		if(tid<8)	sh_sum[tid] += sh_sum[tid + 8];		syncthreads();
+		if(tid<4)	sh_sum[tid] += sh_sum[tid + 4];		syncthreads();
+		if(tid<2)	sh_sum[tid] += sh_sum[tid + 2];		syncthreads();
+		if(tid<1)	sh_sum[tid] += sh_sum[tid + 1];		syncthreads();
+		//	-assign sum to its block
+		if(tid==0)	bins[big] = sh_sum[tid];
+	}
+}
+__global__ void
+labels__1_to_N( unsigned int WIDTH, unsigned int HEIGHT,
+				unsigned int *lab_mat, unsigned int *cumsum,
+				unsigned int kmax_e, unsigned int bdx_end,
+				unsigned int *ID_rand, unsigned int *ID_1toN){
+	/**
+	 * 	This kernel writes in lab_mat[tid]=tid an ID values such that all IDs are between [1,Nbins].
+	 */
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	unsigned int gdx		= gridDim.x;
+	unsigned int gdy		= gridDim.y;
+	unsigned int big		= biy*gdx + bix;	// block index on grid!
+	unsigned int tix		= bdx*bix + c;	// horizontal 	offset
+	unsigned int tiy		= bdy*biy + r;	// vertical 	offset
+	unsigned int tid		= bdx * r + c;
+
+	unsigned int y_offset	= (WIDTH*bdy*biy);
+	unsigned int x_offset	= (bdx*fBDY(HEIGHT)*bix);
+	unsigned int blk_offset	= (fBDX(WIDTH)*r+c);
+	unsigned int ttid		= y_offset + x_offset + blk_offset;
+	unsigned int k 			= cumsum[big];
+	unsigned int kmax 		= 0;
+	if(big>=gdx*gdy-1) kmax	= kmax_e;
+	else 			   kmax = cumsum[big+1];
+
+	extern __shared__ unsigned int sh_sum[];
+	//	-initialisation:
+	sh_sum[tid] = 0;								syncthreads();
+
+	unsigned int bdx_act	= 0;
+	unsigned int bdy_act	= 0;
+
+	if( tix<WIDTH && tiy<HEIGHT && kmax-k>0)
+	{
+		// 0.\ prepare
+		//if(blockIdx.x >= gridDim.x-1) bdx		= bdx_end;
+		bdx_act = fBDX(WIDTH); // actual block dim in X
+		bdy_act = fBDY(HEIGHT);// actual block dim in Y (In fBDY I assume that blockDim.X = blockDim.Y)
+
+		// 1.\ simple write operation
+		//	-ones:
+		if(lab_mat[ttid]==ttid){	sh_sum[tid] = 1;syncthreads(); }
+		//	-the lab_mat[ttid]==ttid condition is not valid for label "ZERO":
+		if(ttid==0){ sh_sum[tid]= 0; }// && lab_mat[ttid]==Vb
+
+		// 2.\ write labels within [1,Nbins] in lab_mat
+		unsigned int ii=0;
+		if (tid==0){// thread=0 writes
+			for(unsigned int row=0;row<bdy_act;row++){
+				for(unsigned int col=0;col<bdx_act;col++){
+					if (sh_sum[row*bdx_act+col]==1){
+						ii = row*bdx_act+col;
+						ID_rand[k] = lab_mat[ttid+ii];
+						ID_1toN[k] = k+1;
+						lab_mat[ttid+ii] = k+1;
+						k+=1;
+						//lab_mat[ttid+ii] = k;
+					}
+				}
+			}
+		}
+	}
+}
+__global__ void
+intratile_relabel_1toN_notgood(	unsigned int WIDTH_e, unsigned int HEIGHT_e,
+						unsigned int *lab_mat, unsigned int *cumsum, unsigned int Nbins,
+						const unsigned int *ID_rand, const unsigned int *ID_1toN ){
+	/**
+	 * 	This kernel assign to each pixel the value of the root ID written where
+	 * 	lab_mat[tid] is equal to tid.
+	 */
+
+	extern __shared__ unsigned int  lab_mat_sh[];
+
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+	// new
+	//unsigned int gdx		= gridDim.x;
+	//unsigned int gdy		= gridDim.y;
+	//unsigned int big		= biy*gdx + bix;	// block index on grid!
+	// new
+	unsigned int tix		= bdx*bix + c;		// horizontal 	offset
+	unsigned int tiy		= bdy*biy + r;		// vertical 	offset
+	unsigned int otid		= bdx * r + c;
+
+	unsigned int y_offset	= (WIDTH_e*bdy*biy);
+	unsigned int x_offset	= (bdx*fBDY(HEIGHT_e)*bix);
+	unsigned int blk_offset	= (fBDX(WIDTH_e)*r+c);
+	unsigned int ttid		= y_offset + x_offset + blk_offset;
+
+	if( tix<WIDTH_e && tiy<HEIGHT_e )// iTile<gdx*gdy
+	{
+		lab_mat_sh[otid] = lab_mat[ttid]; 		syncthreads();
+
+		// find the upper and lower IDs limits for current block:
+		int start = 0;//big==0? 0:cumsum[big-1]+0;
+		int end   = Nbins;//big==gdx*gdy-1? Nbins : cumsum[big+1];
+		// try to write a sequence of IDs starting from 1 to N:
+		//for(unsigned int ii=0; ii<Nbins; ii++){
+		for(unsigned int ii=start; ii<=end; ii++){
+			if(lab_mat_sh[otid]==ID_rand[ii]){
+				lab_mat_sh[otid] = ID_1toN[ii]; syncthreads();
+			}
+		}
+		lab_mat[ttid] = lab_mat_sh[otid]; 		syncthreads();
+	}
+}
+__global__ void
+intratile_relabel_1toN(unsigned int WIDTH_e, unsigned int HEIGHT_e, unsigned int *lab_mat){
+	/**
+	 * 	This kernel assign to each pixel the value of the root ID written where
+	 * 	lab_mat[tid] is equal to tid.
+	 */
+
+
+	// See this link when using more then one extern __shared__ array:
+	// 		http://stackoverflow.com/questions/9187899/cuda-shared-memory-array-variable
+	//extern __shared__ unsigned char urban_sh[];
+//	extern __shared__ unsigned int  lab_mat_sh[];
+
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+//	unsigned int gdx		= gridDim.x;
+//	unsigned int gdy		= gridDim.y;
+	unsigned int tix		= bdx*bix + c;	// horizontal 	offset
+	unsigned int tiy		= bdy*biy + r;	// vertical 	offset
+
+//	unsigned int otid		= bdx * r + c;
+
+	unsigned int y_offset	= (WIDTH_e*bdy*biy);
+	unsigned int x_offset	= (bdx*fBDY(HEIGHT_e)*bix);
+	unsigned int blk_offset	= (fBDX(WIDTH_e)*r+c);
+	unsigned int ttid		= y_offset + x_offset + blk_offset;
+
+	if( tix<WIDTH_e && tiy<HEIGHT_e )// iTile<gdx*gdy
+	{
+		if(lab_mat[ttid]!=Vb && lab_mat[lab_mat[ttid]]!=Vb)  lab_mat[ttid]=lab_mat[lab_mat[ttid]];
+	}
+}
 __global__ void
 del_duplicated_lines( 	const unsigned int *lab_mat_gpu,	unsigned int WIDTH_e,unsigned int HEIGHT_e,
 							  unsigned int *lab_mat_gpu_f,	unsigned int WIDTH,	 unsigned int HEIGHT	){
-
+	/**
+	 * 	This kernel delete duplicated lines and write final image with pixels
+	 * 	ordered as they are located in geographical domain.
+	 */
 	unsigned int r 			= threadIdx.y;
 	unsigned int c 			= threadIdx.x;
 	unsigned int bdx		= blockDim.x;
@@ -717,25 +1006,135 @@ del_duplicated_lines( 	const unsigned int *lab_mat_gpu,	unsigned int WIDTH_e,uns
 	}
 }
 
+template <class T, unsigned int blockSize, bool nIsPow2>
+__global__ void
+reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+{
+	/*  x---bdx*mapel_per_thread----x
+	 * 	 ___________________________ __...
+	 * 	|___________________________|__...		*g_idata
+	 *
+	 * 	 ___ ___ ___ ___ ___ ___ ___ __...
+	 * 	|___|___|___|___|___|___|___|__...		*g_idata
+	 * 	x---x
+	 * 	 bdx
+	 * 	|   \
+	 * 	|    \____________________
+	 * 	|     					  |				 -zoom in g_idata to highlight how sdata works.
+	 * 	x-----------bdx-----------x				 -bdx=threads
+	 * 	 _ _ _ _ _ _ _ _ _ _ _ _ _ _...
+	 * 	|_|_|_|_|_|_|_|_|_|_|_|_|_|_...			sdata   _
+	 * 	 						  			     -each |_| is an element of sdata in which mapel_per_thread pixels are summed up by one tid.
+	 * 	 ____________  x
+	 * 	|            | |
+	 *  | *sdata     | Nbins					 -the mapel_per_thread pixels are summed up by tid and written using this offset:
+	 *  |            | |							offset = j*bdx + tid; where j=1,...,Nbins.
+	 *  |____________| x						 -each tid is in charge of its column number in sdata.
+	 *											 -each row in sdata represents a bin "j" within Nbins.
+	 *  x--threads---x
+	 */
+    T *sdata = SharedMemory<T>();// size = bdx * Nbins
+    // sdata_j
+	__shared__ unsigned int sdata_j[blockSize];
+
+    // perform first level of reduction,
+    // reading from global memory, writing to shared memory
+    unsigned int tid 		= threadIdx.x;
+    unsigned int bix 		= blockIdx.x;
+    unsigned int bdx 		= blockDim.x;
+    unsigned int gdx 		= gridDim.x;
+    unsigned int i 			= bix*blockSize*2 + tid;
+    unsigned int gridSize 	= blockSize*2*gdx;
+    unsigned int j			= 0;
+    unsigned int offset 	= 0;
+
+    T 			 locSum 	= 0;
+
+    for(j=0;j<Nbins;j++) sdata[j*bdx+tid]=0;
+
+    // we reduce multiple elements per thread.  The number is determined by the
+    // number of active thread blocks (via gridDim).  More blocks will result
+    // in a larger gridSize and therefore fewer elements per thread
+    while (i < map_len)
+    {
+    	sdata[ g_idata[i]*bdx + tid ] += ROI[i];// here the j of the offset is given by the value in g_idata[i]
+        // ensure we don't read out of bounds -- this is optimised away for powerOf2 sized arrays
+        if (nIsPow2 || i + blockSize < map_len) sdata[ g_idata[i+blockSize]*bdx + tid ] += ROI[i+blockSize];
+        i += gridSize;
+    }
+    __syncthreads();
+
+    /*
+     * Now I have sdata that stores for each bin "j" in Nbins (y-axis) the sum of ID=j of object "j"
+     * for each of the tid threads (x-axis) in current block.
+     * The next step (i.e. the for loop on j) has to reduce each row of sdata so that each block
+     * gives the histogram of its bdx*mapel_per_thread pixels.
+     *
+     * 	 ____________  x
+	 * 	|            | |
+	 *  | *sdata     | Nbins
+	 *  |            | |
+	 *  |____________| x
+	 *
+	 *  x--threads---x
+	 */
+    for(j=0;j<Nbins;j++){// start from j=1, to avoid the computation of background
+
+    	offset 			= j*bdx+tid;
+        // each thread puts the sum in shared memory into local memory
+        locSum 			= sdata[offset]; __syncthreads();
+        sdata_j[tid] 	= sdata[offset]; __syncthreads();
+
+		// do reduction in shared memory
+		if (blockSize >= 512) if (tid < 256) sdata_j[tid] = locSum = locSum + sdata_j[tid + 256]; __syncthreads();
+		if (blockSize >= 256) if (tid < 128) sdata_j[tid] = locSum = locSum + sdata_j[tid + 128]; __syncthreads();
+		if (blockSize >= 128) if (tid <  64) sdata_j[tid] = locSum = locSum + sdata_j[tid +  64]; __syncthreads();
+		if (tid < 32)
+		{
+			// now that we are using warp-synchronous programming (below)
+			// we need to declare our shared memory volatile so that the compiler
+			// doesn't reorder stores to it and induce incorrect behaviour.
+			volatile T *smem = sdata_j;
+
+			if (blockSize >=  64) smem[tid] = locSum = locSum + smem[tid + 32];
+			if (blockSize >=  32) smem[tid] = locSum = locSum + smem[tid + 16];
+			if (blockSize >=  16) smem[tid] = locSum = locSum + smem[tid +  8];
+			if (blockSize >=   8) smem[tid] = locSum = locSum + smem[tid +  4];
+			if (blockSize >=   4) smem[tid] = locSum = locSum + smem[tid +  2];
+			if (blockSize >=   2) smem[tid] = locSum = locSum + smem[tid +  1];
+		}
+	    // write result for this block to global memory
+		//if (tid == 0) g_odata[blockIdx.x] = sdata[0];
+	    if (tid == 0) atomicAdd( &g_ohist[ j ], sdata_j[0] );//cannot understand why NVidia does not put smem instead of sdata!!!
+    }
+}
+
+/** I have two issues:
+ * 		> ccl algorithm does not work for: (i) large images[false], (ii) too much compacted objects[?], (iii) BIN with all ones[true], (iv) small images[?]
+ * 		> histogram doesn't work at all
+ */
 int main(int argc, char **argv){
 
 	// Parameter:
 	const unsigned int 	NTHREADSX 			= 32;
 
 	// DECLARATIONS:
+	unsigned int		ii,Nbins;
 	bool 				printme				= false;
-	unsigned int  		*lab_mat_cpu, *lab_mat_gpu, *lab_mat_cpu_f, *lab_mat_gpu_f;
-	unsigned char 		*urban_gpu;
-	metadata 			MDbin,MDuint;
+	unsigned int  		*lab_mat_cpu, *lab_mat_gpu, *lab_mat_cpu_f, *lab_mat_gpu_f, *bins_cpu,/* *ones_gpu,*/ *bins_gpu, *cumsum, *ID_rand_gpu, *ID_1toN_gpu;
+	unsigned char 		*urban_gpu,*dev_ROI;
+	unsigned int 		*h_histogram, *d_histogram;// it's size is equal to the number of blocks within grid!
+	metadata 			MDbin,MDuint,MDroi;
 	unsigned int		gpuDev				= 0;
 	unsigned int 		sqrt_nmax_threads 	= 0;
+	unsigned int 		num_blocks_per_SM, mapel_per_thread;
+	unsigned int		map_len;
 	// it counts the number of kernels that must print their LAB-MAT:
 	unsigned int 		count_print			= 0;
 	unsigned int 		elapsed_time		= 0;
 	// clocks:
 	clock_t 			start_t, end_t;
 	cudaDeviceProp		devProp;
-
 	/*
 	 * 		ESTABILISH CONTEXT
 	 */
@@ -746,10 +1145,17 @@ int main(int argc, char **argv){
 	CUDA_CHECK_RETURN( cudaSetDevice(gpuDev) );
 	cudaGetDeviceProperties(&devProp, gpuDev);
 	sqrt_nmax_threads 		= NTHREADSX;//floor(sqrt( devProp.maxThreadsPerBlock ));
+	int N_sm				= devProp.multiProcessorCount;
+	int max_threads_per_SM	= devProp.maxThreadsPerMultiProcessor;
+
 
 	/* ....::: ALLOCATION :::.... */
 	// -0- read metadata
 	MDbin					= geotiffinfo( FIL_BIN, 1 );
+	MDroi 					= geotiffinfo( FIL_ROI, 1 );
+	MDuint 					= MDbin;
+	MDuint.pixel_type 		= GDT_UInt32;
+	map_len 				= MDbin.width*MDbin.heigth;
 	// MANIPULATION:
 	unsigned int tiledimX 	= sqrt_nmax_threads;
 	unsigned int tiledimY 	= sqrt_nmax_threads;
@@ -772,39 +1178,60 @@ int main(int argc, char **argv){
 //	size_t sizeUintL 		= WIDTH   * HEIGHT_1 * sizeof(unsigned int);
 	size_t sizeUintL_s 		= WIDTH   * HEIGHT   * sizeof(unsigned int);
 	size_t sizeUintL_e 		= WIDTH_e * HEIGHT_e * sizeof(unsigned int);  // the offset is considered (using HEIGHT_1 to define HEIGHT_e)
+	size_t sizeBins 		= ntilesX*ntilesY*sizeof(unsigned int);
 
 	// -1- load geotiff [urban_cpu]
 	unsigned char *urban_cpu	= (unsigned char *) CPLMalloc( sizeChar );
-	printf("Importing...\t%s\n\n",FIL_BIN);
-	geotiffread(FIL_BIN,MDbin,urban_cpu);
+	unsigned char *ROI 			= (unsigned char *) CPLMalloc( sizeChar );
+	printf("Importing...\t%s\t",FIL_BIN);
+	geotiffread( FIL_BIN,MDbin,urban_cpu );
+	printf("...done!\n");
+	printf("Importing...\t%s\t",FIL_ROI);
+	geotiffread( FIL_ROI, MDroi, &ROI[0] );
+	printf("...done!\n");
 
 	// -2- urban_gpu -- stream[0]
-	CUDA_CHECK_RETURN( cudaMalloc( (void **)&urban_gpu, sizeChar_o ) );
-	CUDA_CHECK_RETURN( cudaMemset( urban_gpu,0, sizeChar_o ) );
+	CUDA_CHECK_RETURN( cudaMalloc( (void **)&urban_gpu, 	sizeChar_o 	) );
+	CUDA_CHECK_RETURN( cudaMemset( urban_gpu, 0, 			sizeChar_o 	) );
+	CUDA_CHECK_RETURN( cudaMalloc( (void **)&dev_ROI, 		sizeChar_o 	) );
 	// I consider the WIDTH offset in copy to leave the first row with all zeros!
-	CUDA_CHECK_RETURN( cudaMemcpy( urban_gpu+WIDTH,urban_cpu,	sizeChar,cudaMemcpyHostToDevice ) );
+	CUDA_CHECK_RETURN( cudaMemcpy( urban_gpu+WIDTH,urban_cpu,sizeChar, cudaMemcpyHostToDevice ) );
+	CUDA_CHECK_RETURN( cudaMemcpy( dev_ROI, ROI, 			 sizeChar, cudaMemcpyHostToDevice ) );
 	// -3- lab_mat_cpu
-	CUDA_CHECK_RETURN( cudaMallocHost(&lab_mat_cpu,	 sizeUintL_e) );
-	CUDA_CHECK_RETURN( cudaMallocHost(&lab_mat_cpu_f,sizeUintL_s) );
+	CUDA_CHECK_RETURN( cudaMallocHost(&lab_mat_cpu,	 		sizeUintL_e	) );
+	CUDA_CHECK_RETURN( cudaMallocHost(&lab_mat_cpu_f,		sizeUintL_s	) );
 	// -4- lab_mat_gpu  -- stream[1]
-	CUDA_CHECK_RETURN( cudaMalloc( (void **)&lab_mat_gpu, sizeUintL_e ) );
-	CUDA_CHECK_RETURN( cudaMemset( lab_mat_gpu,0, sizeUintL_e ) );
+	CUDA_CHECK_RETURN( cudaMalloc( (void **)&lab_mat_gpu, 	sizeUintL_e ) );
+	CUDA_CHECK_RETURN( cudaMemset( lab_mat_gpu, 0, 			sizeUintL_e ) );
 	CUDA_CHECK_RETURN( cudaMalloc( (void **)&lab_mat_gpu_f, sizeUintL_s ) );
-	CUDA_CHECK_RETURN( cudaMemset( lab_mat_gpu_f,0, sizeUintL_s ) );
+	CUDA_CHECK_RETURN( cudaMemset( lab_mat_gpu_f,0, 		sizeUintL_s ) );
+	// -5- bins
+	CUDA_CHECK_RETURN( cudaMalloc( (void **)&bins_gpu, 		sizeBins 	) );
+	CUDA_CHECK_RETURN( cudaMemset( bins_gpu, 0, 			sizeBins 	) );
+	CUDA_CHECK_RETURN( cudaMallocHost((void**)&bins_cpu,	sizeBins 	) );
+	CUDA_CHECK_RETURN( cudaMallocHost((void**)&cumsum,		sizeBins 	) );
+	// -6- ones
+//	CUDA_CHECK_RETURN( cudaMalloc( (void **)&ones_gpu, 		sizeUintL_e ) );
+//	CUDA_CHECK_RETURN( cudaMemset( ones_gpu, 1,				sizeUintL_e ) );
 	/* ....::: ALLOCATION :::.... */
 
 /*
  *		KERNELS INVOCATION
  *
  *			*************************
- *			-1- intra_tile_labeling		| --> 1st Stage
+ *			-1- intra_tile_labeling		|  --> 1st Stage :: intra-tile		:: mandatory
  *
  *			-2- stitching_tiles			|\
- *			-2- root_equivalence		| --> 2nd Stage
+ *			-3- root_equivalence		|_|--> 2nd Stage :: inter-tiles		:: mandatory
  *
- *			-3- intra_tile_re_label		| --> 3rd Stage
+ *			-4- intra_tile_re_label		|  --> 3rd Stage :: intra-tile		:: mandatory
  *
- *			-4- del_duplicated_lines	| --> 4th Stage
+ *			-5- count_labels			|\
+ *			-6- labels__1_to_N			| |--> 4th Stage :: labels 1 to N	:: optional (set relabel)
+ *			-7- intratile_relabel_1toN	|/
+ *
+ *			-8- del_duplicated_lines	|  --> 5th Stage :: adjust size		:: mandatory
+ *
  *			*************************
  */
 
@@ -813,8 +1240,11 @@ int main(int argc, char **argv){
 	unsigned int 	sh_mem	= (tiledimX*tiledimY)*(sizeof(unsigned int));
 	dim3 	block_2(tiledimX,1,1); // ==> this is only possible if the block is squared !!!!!!!! Because I use the same threads for cols & rows
 	dim3 	grid_2(ntilesX,ntilesY,1);
+	dim3 	block_3(tiledimX*tiledimY,1,1);
+	dim3 	grid_3(ntilesX*ntilesY,1,1);
+	// reduce6
 
-	/* ....::: [1/4 stage] INTRA-TILE :::.... */
+	/* ....::: [1/5 stage] INTRA-TILE :::.... */
 	start_t = clock();
 	intra_tile_labeling<<<grid,block,sh_mem>>>(urban_gpu,WIDTH,HEIGHT_1,WIDTH_e,HEIGHT_e,lab_mat_gpu);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
@@ -830,9 +1260,9 @@ int main(int argc, char **argv){
 		//write_labmat_tiled_without_duplicated_LINES(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
-	/* ....::: [1/4 stage] :::.... */
+	/* ....::: [1/5 stage] :::.... */
 
-	/* ....::: [2/4 stage] STITCHING :::.... */
+	/* ....::: [2/5 stage] STITCHING :::.... */
 	start_t = clock();
 	stitching_tiles<NTHREADSX><<<grid,block_2>>>(lab_mat_gpu,tiledimY, WIDTH_e, HEIGHT_e);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
@@ -843,7 +1273,7 @@ int main(int argc, char **argv){
 		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_2);
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
-		sprintf(buffer,"%s/data/-%d-%s__k2.txt",BASE_PATH,count_print,kern_1);
+		sprintf(buffer,"%s/data/-%d-%s__k2.txt",BASE_PATH,count_print,kern_2);
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
@@ -858,13 +1288,13 @@ int main(int argc, char **argv){
 		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_3);
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
-		sprintf(buffer,"%s/data/-%d-%s__k3.txt",BASE_PATH,count_print,kern_1);
+		sprintf(buffer,"%s/data/-%d-%s__k3.txt",BASE_PATH,count_print,kern_3);
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
-	/* ....::: [2/4 stage] :::.... */
+	/* ....::: [2/5 stage] :::.... */
 
-	/* ....::: [3/4 stage] RE-LABELING :::.... */
+	/* ....::: [3/5 stage] RE-LABELING :::.... */
 	start_t = clock();
 	intra_tile_re_label<<<grid,block,sh_mem>>>(WIDTH_e,HEIGHT_e,lab_mat_gpu);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
@@ -877,9 +1307,75 @@ int main(int argc, char **argv){
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
-	/* ....::: [3/4 stage] :::.... */
+	/* ....::: [3/5 stage] :::.... */
 
-	/* ....::: [4/4 stage] DEL DUPLICATES :::.... */
+if (relabel){
+	/* ....::: [4/5 stage] DEL DUPLICATES :::.... */
+	start_t = clock();
+	count_labels<<<grid,block,sh_mem>>>(WIDTH_e,HEIGHT_e,lab_mat_gpu,bins_gpu);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	CUDA_CHECK_RETURN( cudaMemcpy( bins_cpu, bins_gpu, sizeBins, cudaMemcpyDeviceToHost ) );
+	cumsum[0] = 0;
+	Nbins = bins_cpu[0];
+	//printf("%4s %12s %12s\n", "ii", "bins[ii]", "cumsum[ii]" );
+	//printf("%4d %12d %12d\n", 0, bins_cpu[0], cumsum[0] );
+	for(ii=1;ii<ntilesX*ntilesY;ii++){
+		cumsum[ii] = Nbins;
+		Nbins += bins_cpu[ii];
+		//cumsum[ii] = cumsum[ii-1] + bins_cpu[ii-1];
+		//if(bins_cpu[ii]!=0) printf("%4d %12d %12d\n", ii, bins_cpu[ii], cumsum[ii] );
+	}
+	end_t = clock();
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_4_a,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+
+	start_t = clock();
+	CUDA_CHECK_RETURN( cudaMalloc( (void **)&ID_rand_gpu,Nbins*sizeof(unsigned int) ) );
+	CUDA_CHECK_RETURN( cudaMalloc( (void **)&ID_1toN_gpu,Nbins*sizeof(unsigned int) ) );
+	CUDA_CHECK_RETURN( cudaMemcpy( bins_gpu, cumsum, sizeBins, cudaMemcpyHostToDevice ) );
+	unsigned int bdx_e 	= WIDTH_e  - (ntilesX-1)*tiledimX;
+	//unsigned int kmax_e = bins_cpu[ntilesX*ntilesY-1];
+	unsigned int kmax_e = Nbins;//cumsum[ntilesX*ntilesY-1];
+	labels__1_to_N<<<grid,block,sh_mem>>>( WIDTH_e, HEIGHT_e, lab_mat_gpu, bins_gpu, kmax_e, bdx_e, ID_rand_gpu, ID_1toN_gpu );
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_4_b,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		//tmp code :: save as GeoTiff
+		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_4_b);
+		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
+		/*
+		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
+		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4_b);
+		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
+		sprintf(buffer,"%s/data/-%d-%s__k3.txt",BASE_PATH,count_print,kern_4_b);
+		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
+		*/
+	}
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+
+	start_t = clock();
+	//intratile_relabel_1toN_notgood<<<grid,block,sh_mem>>>(	WIDTH_e, HEIGHT_e, lab_mat_gpu, bins_gpu, Nbins, ID_rand_gpu, ID_1toN_gpu );
+	intratile_relabel_1toN<<<grid,block,sh_mem>>>(WIDTH_e,HEIGHT_e,lab_mat_gpu);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_4_c,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
+		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4_c);
+		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
+		sprintf(buffer,"%s/data/-%d-%s__k3.txt",BASE_PATH,count_print,kern_4_c);
+		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
+	}
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+	/* ....::: [4/5 stage] :::.... */
+}
+
+	/* ....::: [5/5 stage] :::.... */
 	start_t = clock();
 	del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
@@ -892,7 +1388,31 @@ int main(int argc, char **argv){
 		write_labmat_full(lab_mat_cpu_f, HEIGHT, WIDTH, buffer);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
-	/* ....::: [4/4 stage] :::.... */
+	/* ....::: [5/5 stage] :::.... */
+
+if (relabel){
+	/* ....::: [6/5 stage] :::.... */
+	// -7- histogram
+	CUDA_CHECK_RETURN( cudaMallocHost( 	(void **)&h_histogram,	Nbins*sizeof( unsigned int )) );
+	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&d_histogram,  Nbins*sizeof( unsigned int )) );
+	int BLOCK_DIM 		= 512;
+	num_blocks_per_SM	= max_threads_per_SM / BLOCK_DIM;
+	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((BLOCK_DIM*1)*N_sm*num_blocks_per_SM) );
+	dim3 	dimBlock( threads, 1, 1 );
+	//dim3 	dimGrid(  blocks,  1, 1 );
+	dim3 	dimGrid(  N_sm*num_blocks_per_SM,  1, 1 );
+	int smemSize 		= threads*Nbins * sizeof(unsigned int);// sdata=threads*Nbins is allocated dinamically, while sdata_j=threads*1 and is allocated statically
+	start_t = clock();
+	// I/O config of reduce6_hist ––> (*g_idata, *ROI, *g_ohist, map_len, mapel_per_thread, Nbins)
+	if (isPow2(map_len)){ reduce6_hist<unsigned int, 512, true> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
+	}else{	 			  reduce6_hist<unsigned int, 512, false><<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);}
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_6,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	CUDA_CHECK_RETURN( cudaMemcpy(h_histogram,d_histogram,	(size_t)Nbins*sizeof( unsigned int ),cudaMemcpyDeviceToHost) );
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+	/* ....::: [6/5 stage] :::.... */
+}
 
 	/* DO NOT EDIT THE FOLLOWING PRINT (it's used in MatLab to catch the elapsed time!)*/
 	//printf("Total time: %f [msec]\n", (double)(end_t - start_t) / CLOCKS_PER_SEC * 1000 );
@@ -900,10 +1420,11 @@ int main(int argc, char **argv){
 	printf("  %24s\t%6d [msec]\n", "Total time:",elapsed_time );
 
 	// SAVE lab_mat to file and compare with MatLab
-	MDuint 						= MDbin;
-	MDuint.pixel_type 			= GDT_UInt32;
 	//write_labmat_matlab(lab_mat_cpu, tiledimX, tiledimY, ntilesX, ntilesY, Lcuda);
 	geotiffwrite(FIL_BIN,FIL_LAB,MDuint,lab_mat_cpu_f);
+	// SAVE histogram
+	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"cu_histogram");
+	write_labmat_full(h_histogram, Nbins, 1, buffer);
 
 	FILE *fid;
 	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"performance");

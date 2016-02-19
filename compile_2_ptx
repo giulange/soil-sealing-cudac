@@ -1,0 +1,6 @@
+#!/bin/sh
+# /usr/local/cuda-5.5/bin/nvcc --compile -G -I/usr/include/gdal/ -O0 -g -gencode arch=compute_20,code=compute_20 -gencode arch=compute_20,code=sm_20  -x cu -ptx -o  "/opt/webgis_weatherprog/cudacodes/stats4maps.ptx" "/home/giuliano/git/cuda/weatherprog-cudac/src/time_stats_on_maps.cu"
+/usr/local/cuda-5.5/bin/nvcc -arch sm_20 -ptx -o "/opt/soil_sealing/cudacodes/ccl.ptx" "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/src/ccl_4_ss-gci.cu"
+chmod +x /opt/soil_sealing/cudacodes/ccl.ptx
+chmod -w /opt/soil_sealing/cudacodes/ccl.ptx
+# sudo chown geosolutions /opt/soil_sealing/cudacodes/fragmentation.ptx
