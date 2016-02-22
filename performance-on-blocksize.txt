@@ -1,0 +1,18 @@
+  -1-  intra_tile_labeling	   170 [msec]
+  -2-      stitching_tiles	   240 [msec]
+  -3-     root_equivalence	   500 [msec]
+  -4-  intra_tile_re_label	    30 [msec]
+  -5- del_duplicated_lines	    40 [msec]
+_______________________________________________
+               Total time:	   980 [msec]
+
+
+
+  -1-  intra_tile_labeling	   140 [msec]
+  -2-      stitching_tiles	   520 [msec]
+  -3-     root_equivalence	  1090 [msec]
+  -4-  intra_tile_re_label	    20 [msec]
+  -5- del_duplicated_lines	    40 [msec]
+_______________________________________________
+               Total time:	  1810 [msec]
+

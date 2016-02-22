@@ -1048,18 +1048,19 @@ reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned in
     unsigned int j			= 0;
     unsigned int offset 	= 0;
 
-    T 			 locSum 	= 0;
+    T 			 *mySum;
+    T			 locSum;
 
-    for(j=0;j<Nbins;j++) sdata[j*bdx+tid]=0;
+    //for(j=0;j<Nbins;j++) sdata[j*bdx+tid]=0;
 
     // we reduce multiple elements per thread.  The number is determined by the
     // number of active thread blocks (via gridDim).  More blocks will result
     // in a larger gridSize and therefore fewer elements per thread
     while (i < map_len)
     {
-    	sdata[ g_idata[i]*bdx + tid ] += ROI[i];// here the j of the offset is given by the value in g_idata[i]
+    	mySum[ g_idata[i]*bdx ] += ROI[i];// here the j of the offset is given by the value in g_idata[i]
         // ensure we don't read out of bounds -- this is optimised away for powerOf2 sized arrays
-        if (nIsPow2 || i + blockSize < map_len) sdata[ g_idata[i+blockSize]*bdx + tid ] += ROI[i+blockSize];
+        if (nIsPow2 || i + blockSize < map_len) mySum[ g_idata[i+blockSize]*bdx ] += ROI[i+blockSize];
         i += gridSize;
     }
     __syncthreads();
@@ -1082,8 +1083,9 @@ reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned in
 
     	offset 			= j*bdx+tid;
         // each thread puts the sum in shared memory into local memory
-        locSum 			= sdata[offset]; __syncthreads();
-        sdata_j[tid] 	= sdata[offset]; __syncthreads();
+        locSum 			= mySum[j]; __syncthreads();
+        sdata_j[tid] 	= locSum;//sdata[offset];
+        __syncthreads();
 
 		// do reduction in shared memory
 		if (blockSize >= 512) if (tid < 256) sdata_j[tid] = locSum = locSum + sdata_j[tid + 256]; __syncthreads();

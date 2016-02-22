@@ -1,0 +1,13 @@
+# how to use thust primitives from within C++ (not possible from within Java)
+
+# copy original source file:
+cp histo.cu histo-tmp.cu
+
+# I modified the main in order to accept N as input when calling histo
+
+# compile the new version of histo
+nvcc -o histo.exe histo-tmp.cu
+
+# execute histo giving a large N to test speed:
+./histo.exe 1350750
+
