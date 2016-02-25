@@ -83,12 +83,13 @@ static const unsigned int 	blocks 						= 64;	//[reduce6] No of blocks working i
 const char 					*BASE_PATH					= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing";
 char						buffer[255];
 // I/-
-//const char 		*FIL_BIN	= "/home/giuliano/git/cuda/fragmentation/data/BIN-cropped.tif";
-//const char		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/BIN.tif";
+// create on-the-fly in MatLab
+const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_BIN.tif";
+const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_ROI.tif";
 // size=[300, 204]
 //const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/ROI.tif";
 //const char 		*FIL_BIN 		= "/home/giuliano/git/cuda/fragmentation/data/BIN.tif";
-// size=[9152, 9002]
+// size=[9152, 9002] **THIS GRIDS ARE BAD TO TEST CCL**
 //const char 		*FIL_ROI 	= "/home/giuliano/git/cuda/fragmentation/data/lodi1954_roi.tif";
 //const char 		*FIL_BIN 	= "/home/giuliano/git/cuda/fragmentation/data/lodi1954.tif";
 // size=[9152, 9002]
@@ -101,12 +102,13 @@ char						buffer[255];
 //const char		*FIL_ROI		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2_roi.tif";
 //const char		*FIL_BIN		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2.tif";
 // size=[8000, 8000]
-const char 		*FIL_ROI		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels_roi.tif";
-const char 		*FIL_BIN		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels.tif";
+//const char 		*FIL_ROI		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels_roi.tif";
+//const char 		*FIL_BIN		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels.tif";
 
 
 // -/O
 const char		*Lcuda		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/CUDA-code.txt";
+const char		*Lhist		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/cu_histogram.txt";
 const char 		*FIL_LAB 	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/LAB-MAT-cuda.tif";
 // kernel_names
 const char 		*kern_1 	= "intra_tile_labeling";
@@ -353,6 +355,21 @@ write_labmat_matlab(unsigned int *lab_mat, unsigned int nr, unsigned int nc, uns
 		}
 	}
 	fclose(fid);
+}
+
+int
+delete_file( const char *file_name )
+{
+   int status = remove(file_name);
+
+   if( status == 0 )
+      printf("%s file deleted successfully.\n",file_name);
+   else
+   {
+      printf("Unable to delete the file %s\n", file_name);
+      perror("Error");
+   }
+   return 0;
 }
 
 __global__ void
@@ -782,7 +799,8 @@ count_labels( 	unsigned int WIDTH, unsigned int HEIGHT,
 	unsigned int gdx		= gridDim.x;
 //	unsigned int gdy		= gridDim.y;
 	unsigned int big		= biy*gdx + bix;	// block index on grid!
-	unsigned int tid 		= bdx * r + c;
+	//unsigned int tid 		= bdx * r + c;
+	unsigned int tid 		= fBDX(WIDTH) * r + c;
 	unsigned int tix		= bdx*bix + c;		// horizontal 	offset
 	unsigned int tiy		= bdy*biy + r;		// vertical 	offset
 
@@ -822,10 +840,10 @@ count_labels( 	unsigned int WIDTH, unsigned int HEIGHT,
 	}
 }
 __global__ void
-labels__1_to_N( unsigned int WIDTH, unsigned int HEIGHT,
-				unsigned int *lab_mat, unsigned int *cumsum,
-				unsigned int kmax_e, unsigned int bdx_end,
-				unsigned int *ID_rand, unsigned int *ID_1toN){
+labels__1_to_N( unsigned int WIDTH, 	unsigned int HEIGHT,
+				unsigned int *lab_mat, 	unsigned int *cumsum,
+				unsigned int kmax_e, 	unsigned int bdx_end,
+				unsigned int *ID_rand, 	unsigned int *ID_1toN){
 	/**
 	 * 	This kernel writes in lab_mat[tid]=tid an ID values such that all IDs are between [1,Nbins].
 	 */
@@ -837,10 +855,11 @@ labels__1_to_N( unsigned int WIDTH, unsigned int HEIGHT,
 	unsigned int biy		= blockIdx.y;
 	unsigned int gdx		= gridDim.x;
 	unsigned int gdy		= gridDim.y;
-	unsigned int big		= biy*gdx + bix;	// block index on grid!
+	unsigned int big		= biy*gdx + bix;// block index on grid!
 	unsigned int tix		= bdx*bix + c;	// horizontal 	offset
 	unsigned int tiy		= bdy*biy + r;	// vertical 	offset
-	unsigned int tid		= bdx * r + c;
+	//unsigned int tid		= bdx * r + c;
+	unsigned int tid		= fBDX(WIDTH) * r + c;
 
 	unsigned int y_offset	= (WIDTH*bdy*biy);
 	unsigned int x_offset	= (bdx*fBDY(HEIGHT)*bix);
@@ -853,7 +872,7 @@ labels__1_to_N( unsigned int WIDTH, unsigned int HEIGHT,
 
 	extern __shared__ unsigned int sh_sum[];
 	//	-initialisation:
-	sh_sum[tid] = 0;								syncthreads();
+	sh_sum[tid] = 0; syncthreads();
 
 	unsigned int bdx_act	= 0;
 	unsigned int bdy_act	= 0;
@@ -867,7 +886,7 @@ labels__1_to_N( unsigned int WIDTH, unsigned int HEIGHT,
 
 		// 1.\ simple write operation
 		//	-ones:
-		if(lab_mat[ttid]==ttid){	sh_sum[tid] = 1;syncthreads(); }
+		if(lab_mat[ttid]==ttid){ sh_sum[tid] = 1; syncthreads(); }
 		//	-the lab_mat[ttid]==ttid condition is not valid for label "ZERO":
 		if(ttid==0){ sh_sum[tid]= 0; }// && lab_mat[ttid]==Vb
 
@@ -1008,7 +1027,7 @@ del_duplicated_lines( 	const unsigned int *lab_mat_gpu,	unsigned int WIDTH_e,uns
 
 template <class T, unsigned int blockSize, bool nIsPow2>
 __global__ void
-reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+reduce6_hist___original(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
 {
 	/*  x---bdx*mapel_per_thread----x
 	 * 	 ___________________________ __...
@@ -1111,11 +1130,94 @@ reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned in
     }
 }
 
+template <class T>
+__global__ void
+reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+{
+	/*  x---bdx*mapel_per_thread----x
+	 * 	 ___________________________ __...
+	 * 	|___________________________|__...		*g_idata
+	 *
+	 * 	 ___ ___ ___ ___ ___ ___ ___ __...
+	 * 	|___|___|___|___|___|___|___|__...		*g_idata
+	 * 	x---x
+	 * 	 bdx
+	 * 	|   \
+	 * 	|    \____________________
+	 * 	|     					  |				 -zoom in g_idata to highlight how sdata works.
+	 * 	x-----------bdx-----------x				 -bdx=threads
+	 * 	 _ _ _ _ _ _ _ _ _ _ _ _ _ _...
+	 * 	|_|_|_|_|_|_|_|_|_|_|_|_|_|_...			sdata   _
+	 * 	 						  			     -each |_| is an element of sdata in which mapel_per_thread pixels are summed up by one tid.
+	 * 	 ____________  x
+	 * 	|            | |
+	 *  | *sdata     | Nbins					 -the mapel_per_thread pixels are summed up by tid and written using this offset:
+	 *  |            | |							offset = j*bdx + tid; where j=1,...,Nbins.
+	 *  |____________| x						 -each tid is in charge of its column number in sdata.
+	 *											 -each row in sdata represents a bin "j" within Nbins.
+	 *  x--threads---x
+	 */
+    //T *sdata = SharedMemory<T>();// size = bdx * Nbins
+    // sdata_j
+	extern __shared__ unsigned int sdata[];
+
+    // perform first level of reduction,
+    // reading from global memory, writing to shared memory
+    unsigned int tid 		= threadIdx.x;
+    unsigned int bix 		= blockIdx.x;
+    unsigned int bdx 		= blockDim.x;
+    unsigned int gdx 		= gridDim.x;
+    unsigned int i 			= bix*bdx + tid;
+    unsigned int gridSize 	= bdx*gdx;
+    unsigned int j			= 0;
+
+    for(j=0;j<=Nbins;j++) if(tid==0) sdata[j]=0; //sdata[j*bdx+tid]=0;
+
+    // we reduce multiple elements per thread.  The number is determined by the
+    // number of active thread blocks (via gridDim).  More blocks will result
+    // in a larger gridSize and therefore fewer elements per thread
+    while (i < map_len)
+    {
+    	atomicAdd( &sdata[ g_idata[i] ], ROI[i] );//ROI[i] instead of 1
+        i += gridSize;
+    }
+    __threadfence_system();
+    __syncthreads();
+
+    /*
+     * Now I have sdata that stores for each bin "j" in Nbins (y-axis) the sum of ID=j of object "j"
+     * for each of the tid threads (x-axis) in current block.
+     * The next step (i.e. the for loop on j) has to reduce each row of sdata so that each block
+     * gives the histogram of its bdx*mapel_per_thread pixels.
+     *
+     * 	 ____________  x
+	 * 	|            | |
+	 *  | *sdata     | Nbins
+	 *  |            | |
+	 *  |____________| x
+	 *
+	 *  x--threads---x
+	 */
+    for(j=0;j<=Nbins;j++){// start from j=1, to avoid the computation of background
+	    // write result for this block to global memory
+		//if (tid == 0) g_odata[blockIdx.x] = sdata[0];
+	    if (tid == 0) atomicAdd( &g_ohist[j], sdata[j] );//cannot understand why NVidia does not put smem instead of sdata!!!
+    }
+}
+
 /** I have two issues:
  * 		> ccl algorithm does not work for: (i) large images[false], (ii) too much compacted objects[?], (iii) BIN with all ones[true], (iv) small images[?]
  * 		> histogram doesn't work at all
  */
 int main(int argc, char **argv){
+
+	/**
+	 * 		D E L E T E   F I L E S
+	 * 		rationale : if execution interrupts before writing the new files, I would consider wrong information in MatLan during the check!
+	 */
+	delete_file( FIL_LAB );
+	delete_file( Lhist );
+
 
 	// Parameter:
 	const unsigned int 	NTHREADSX 			= 32;
@@ -1385,9 +1487,10 @@ if (relabel){
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_5,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
-	if (printme){
+	if (1){
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_5);
-		write_labmat_full(lab_mat_cpu_f, HEIGHT, WIDTH, buffer);
+		//write_labmat_full(lab_mat_cpu_f, HEIGHT, WIDTH, buffer);
+		geotiffwrite(FIL_BIN,FIL_LAB,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [5/5 stage] :::.... */
@@ -1397,17 +1500,19 @@ if (relabel){
 	// -7- histogram
 	CUDA_CHECK_RETURN( cudaMallocHost( 	(void **)&h_histogram,	Nbins*sizeof( unsigned int )) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&d_histogram,  Nbins*sizeof( unsigned int )) );
+	CUDA_CHECK_RETURN( cudaMemset( 		d_histogram, 0, 		Nbins*sizeof( unsigned int )) );
+
 	int BLOCK_DIM 		= 512;
-	num_blocks_per_SM	= max_threads_per_SM / BLOCK_DIM;
-	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((BLOCK_DIM*1)*N_sm*num_blocks_per_SM) );
+	num_blocks_per_SM	= max_threads_per_SM / BLOCK_DIM;// e.g. 1536/512 = 3
+	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((BLOCK_DIM)*N_sm*num_blocks_per_SM) );// e.g. n / (14*3*512*2)
 	dim3 	dimBlock( threads, 1, 1 );
-	//dim3 	dimGrid(  blocks,  1, 1 );
 	dim3 	dimGrid(  N_sm*num_blocks_per_SM,  1, 1 );
-	int smemSize 		= threads*Nbins * sizeof(unsigned int);// sdata=threads*Nbins is allocated dinamically, while sdata_j=threads*1 and is allocated statically
+	int smemSize 		= (Nbins+1) * sizeof(unsigned int);// sdata=threads*Nbins is allocated dinamically, while sdata_j=threads*1 and is allocated statically
 	start_t = clock();
 	// I/O config of reduce6_hist ––> (*g_idata, *ROI, *g_ohist, map_len, mapel_per_thread, Nbins)
-	if (isPow2(map_len)){ reduce6_hist<unsigned int, 512, true> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
+/*	if (isPow2(map_len)){ reduce6_hist<unsigned int, 512, true> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
 	}else{	 			  reduce6_hist<unsigned int, 512, false><<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);}
+*/	reduce6_hist<unsigned int> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_6,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
@@ -1426,7 +1531,7 @@ if (relabel){
 	geotiffwrite(FIL_BIN,FIL_LAB,MDuint,lab_mat_cpu_f);
 	// SAVE histogram
 	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"cu_histogram");
-	write_labmat_full(h_histogram, Nbins, 1, buffer);
+	write_labmat_full(h_histogram, Nbins+1, 1, buffer);
 
 	FILE *fid;
 	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"performance");

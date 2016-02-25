@@ -1,24 +1,26 @@
 %% NEW VERS of CCL WITH SHARED-MEM
-clc
+clear,clc
 T               = NaN(2,1);
 %% GDAL conversion
 % gdal_translate -ot Byte -co TILED=YES -co BLOCKXSIZE=1504 -co BLOCKYSIZE=1216 -co COMPRESS=PACKBITS imp_mosaic_char_2006_cropped2_roi.tif imp_mosaic_char_2006_cropped2_roi__.tif
 %% PARS
 % dir/filenames
 BASE_DIR    = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing';
-T(2)        = 1.780;% [s]
+T(2)        = 0.890;% [s]
 % I/–
 % *old*
 % FIL_BIN     = fullfile('/home/giuliano/git/cuda/fragmentation/data','BIN-cropped.tif');
 % FIL_BIN     = '/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped.tif';
 % FIL_BIN 	= '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/BIN.tif';
 % *old*
+FIL_ROI         = fullfile(BASE_DIR,'data','created-on-the-fly_ROI.tif');
+FIL_BIN         = fullfile(BASE_DIR,'data','created-on-the-fly_BIN.tif');
 % FIL_ROI       = fullfile('/home/giuliano/git/cuda/fragmentation/data','ROI.tif');
 % FIL_BIN       = fullfile('/home/giuliano/git/cuda/fragmentation/data','BIN.tif');
 % FIL_ROI       = '/home/giuliano/git/cuda/fragmentation/data/lodi1954_roi.tif';
 % FIL_BIN       = '/home/giuliano/git/cuda/fragmentation/data/lodi1954.tif';
-FIL_ROI		= '/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels_roi.tif';
-FIL_BIN		= '/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels.tif';
+% FIL_ROI		= '/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels_roi.tif';
+% FIL_BIN		= '/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels.tif';
 % FIL_ROI       = '/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954_roi.tif';
 % FIL_BIN       = '/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954.tif';
 % FIL_ROI		= '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2_roi.tif';
@@ -37,16 +39,16 @@ cu_compile  = 0; % Do you want MatLab compile your source .cu file?
 cu_run      = 0; % Do you want to run the cuda code (compiled here or outside)?
 save_mats   = 0; % Do you want to store BIN & MAT files for specific runs?
 print_me    = 0; % Do you want .cu code print LAB-MAT at the end of every kernel?
-create_bin  = 0; % Do you want to create a new BIN array for a new comparison?
+create_bin  = 1; % Do you want to create a new BIN array for a new comparison?
 deep_check  = 0; % Do you want to perform a deep comparison? (
 % BIN characteristics:
 % tile size in XY – fixed [no more then 32x32]:
 tiledimX    = 32;  % 512 - 32 - 30
 tiledimY    = 32;  % 2   - 32 - 30
 % number of tiles in XY:
-ntilesX     = 2;
-ntilesY     = 2;
-threshold   = 0.6; % to set the density of the image!
+ntilesX     = 41;
+ntilesY     = 73;
+threshold   = 0.8; % to set the density of the image!
 %% set dim:
 if create_bin
 % NOTE:
@@ -68,19 +70,19 @@ NR          = (ntilesY-1)*(tiledimY-1) + tiledimY -2;
 end
 %% arguments to run within Nsight
 % fprintf('%d %d %d %d %d\n',tiledimX,tiledimY,NC,NR,print_me);
-%% create binary image
+%% create BIN & ROI
 if create_bin
     BIN                     = rand(NR,NC);
     BIN(BIN>=(1-threshold)) = 1;
     BIN(BIN<(1-threshold))  = 0;
     BIN                     = logical(BIN);
-
+    ROI                     = true(size(BIN));
     % modification to test for irregular NC*NR
     % NC = NC-2;
     % NR = NR-3;
     % BIN = BIN(1:end-3,1:end-2);
 end
-%% save binary image
+%% save BIN & ROI as geotiff
 if create_bin
 % % fid         = fopen(fullfile(BASE_DIR,'data',FIL_BIN),'w');
 % % for irow = 1:NR
@@ -109,8 +111,12 @@ Rnew                    = maprasterref( ...
             'ColumnsStartFrom',       R.ColumnsStartFrom, ...
             'RowsStartFrom',          R.RowsStartFrom ...
                                   );
-FIL_BIN = fullfile(BASE_DIR,'data','BIN.tif');
 geotiffwrite( FIL_BIN,   BIN, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
+geotiffwrite( FIL_ROI,   ROI, Rnew, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag );
+fprintf('MatLab saved the following Input maps to be used from within CUDA-C:\n\t-%s\n\t-%s\n', ...
+      FIL_BIN, FIL_ROI)
+fprintf('The execution is now paused!\nRun CUDA-C code using the maps given above...\t(press a key after doing that!)\n')
+pause
 end
 %% crop input GRID to fit CUDA blockSize(32,32)
 % if create_bin
@@ -122,11 +128,13 @@ end
 % gclipgrid( FIL_BIN, FIL_BIN_crop, newSize );
 % FIL_BIN = FIL_BIN_crop;
 % end
-%% load BIN from geotiff
-fprintf('Loading BIN... %s\t',FIL_BIN)
-BIN         = geotiffread( FIL_BIN );
-ROI         = geotiffread( FIL_ROI );
-fprintf('...done!\n')
+%% load BIN & ROI from geotiff
+if ~create_bin
+    fprintf('Loading BIN... %s\t',FIL_BIN)
+    BIN         = geotiffread( FIL_BIN );
+    ROI         = geotiffread( FIL_ROI );
+    fprintf('...done!\n')
+end
 %% set derived variables
 WIDTH           = size(BIN,2);
 HEIGHT          = size(BIN,1);
@@ -144,15 +152,23 @@ SIZE__(2)   = ntilesX*ntilesY*tiledimX*tiledimY*4;
 fprintf('Computing MatLab CCL & histogram...\t')
 % compute labeled image from within MatLab;
 tic,
-Lml         = ROI .* transpose( bwlabel(BIN',8) );
+Lml         = double(ROI) .* transpose( bwlabel(BIN',8) );
 IDml        = unique(Lml); if IDml(1)==0, IDml(1)=[]; end
 hist_ml     = zeros(size(IDml));
+T(1)        = toc;
 
 % N = histcounts(X,nbins) 
-for ii = 1: min( 20,numel(IDml) )
+tic
+for ii = 1: min(10,numel(IDml))
     hist_ml(ii) = sum(Lml(:)==IDml(ii));
 end
-T(1)        = toc;
+tmp         = toc;
+if 10<numel(IDml)
+    T(1)    = T(1) + tmp*numel(IDml)/10;
+else
+    T(1)    = T(1) + tmp;
+end
+
 fprintf('...done!\n')
 %% save MatLab labeled image
 % save(fullfile(BASE_DIR,'data',WRITE_TXT('LAB_MAT-ml-',ntilesX,ntilesY,tiledimX,tiledimY)), 'BIN', '-ascii')
@@ -208,9 +224,17 @@ if cu_run
 end
 %% import CUDA labeled image & hist
 fprintf('Importing CUDA CCL & histogram...\t')
-
-Lcuda       = double( geotiffread( FIL_LAB ) );
-hist_cu     = load( fullfile(BASE_DIR,'data','cu_histogram.txt') );
+if exist( FIL_LAB, 'file')
+    Lcuda       = double( geotiffread( FIL_LAB ) );
+else
+    error('Cuda labeled image not found! [%s]',FIL_LAB)
+end
+if exist( FIL_HIST, 'file')
+    hist_cu     = load( FIL_HIST );
+    hist_cu(1)  = [];
+else
+    error('Cuda histogram file not found! [%s]',FIL_HIST)
+end
 
 fprintf('...done!\n')
 %% import CUDA labeled image [in itinere, by hand]
@@ -227,15 +251,15 @@ if save_mats
     copyfile(fullfile(BASE_DIR,'data',FIL_BIN),fullfile(BASE_DIR,'data',WRITE_TXT('BIN_MAT',ntilesX,ntilesY,tiledimX,tiledimY)))
     movefile(fullfile(BASE_DIR,'data','CUDA-code.txt'),fullfile(BASE_DIR,'data',WRITE_TXT('LAB_MAT-cu-',ntilesX,ntilesY,tiledimX,tiledimY)))
 end
-%% compare
-fprintf('\nC O M P A R I S O N :\n')
+%% compare | labels
+fprintf('\nC O M P A R I S O N :: m a p   l a b e l s\n')
 DIFFER  = Lcuda - Lml;
 idx     = find(DIFFER);
 UL      = unique([Lml(idx),Lcuda(idx)],'rows');
 UC      = unique([Lcuda(idx),Lml(idx)],'rows');
 ucu     = unique(Lcuda(:));
 if ucu(1)==0, ucu(1)=[]; end
-nIDs    = numel(ucu); 
+nIDs    = numel(ucu);
 
 fprintf( '%s\n', repmat('–',1,65) );
 fprintf( '   The Connected Component Labeling (CCL) procedure\n' );
@@ -253,6 +277,28 @@ if isempty(UC) Ncu = 0; else Ncu=sum(diff(UC(:,1))==0); end
 fprintf( '     > %d CUDA labels have more MatLab labels\n', Ncu );
 fprintf( '     > speed-up (ml/cu) = %3.1f\t( %3.2f / %3.2f [ms] )\n', T(1)/T(2),T(1)*1000,T(2)*1000 );
 fprintf( '%s\n\n', repmat('–',1,65) );
+%% compare | histogram
+fprintf('\nC O M P A R I S O N :: h i s t o g r a m \n')
+Nids = 10;
+Nids = min(Nids,numel(IDml));
+hist_ml = zeros(size(hist_cu));
+
+fprintf( '%s\n', repmat('–',1,65) );
+% MatLab is my truth: Ids to be Checked:
+Cids = randperm(numel(hist_ml),Nids);% Cids is the list of MatLab IDs
+fprintf('%3s%20s%20s%18s\n','','l a b e l s','h i s t o g r a m','e r r o r')
+fprintf('%3s%10s%10s%10s%10s%18s\n','#','CUDA','MatLab','CUDA','MatLab','cuda vs matlab')
+for ii = 1:Nids
+    err__ = false;
+    hist_ml(Cids(ii)) = sum(Lml(:)==Cids(ii));
+    [ridx,cidx] = find(Lml==Cids(ii),1,'first');
+    currIdxCu = Lcuda(ridx,cidx);
+    if hist_ml(Cids(ii)) ~= hist_cu(currIdxCu)
+        err__ = true;
+    end
+    fprintf('%3d%10d%10d%10d%10d%18d\n',ii,currIdxCu,Cids(ii),hist_cu(currIdxCu),hist_ml(Cids(ii)),err__)
+end
+fprintf( '%s\n\n', repmat('–',1,65) );
 %% plot
 
 % figure(1),subplot(131),gpcolor(DIFFER),title('(CUDA - MatLab) CCL differences')
@@ -262,7 +308,7 @@ fprintf( '%s\n\n', repmat('–',1,65) );
 fprintf('Searching for problems...\n')
 eFound = unique( UL( find(diff(UL(:,1))==0), 1 ) );
 
-for ii = 1:length(eFound)
+for ii = 1:min(20,length(eFound))
     fprintf('MatLab ID[ %4d ] ---> [',eFound(ii));
     List = UL(UL(:,1)==eFound(ii),:);
     for jj=1:sum(UL(:,1)==eFound(ii))
@@ -270,17 +316,20 @@ for ii = 1:length(eFound)
     end
     fprintf(']\n');
 end
+if 20<length(eFound)
+    fprintf(' ...\n')
+end
 fprintf('...end\n')
 %% check number of pixels are the same (without accounting for objects)
 % if deep_check
     fprintf('Unrecognized pixels...\n');
     Lml_bin = Lml;
     Lml_bin(Lml >= 1) = 1;
-    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[MatLab]',sum( double(BIN(:))-Lml_bin(:) ) );
+    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[MatLab]',sum( double(BIN(:))-Lml_bin(:)) );
 
     Lcuda_bin = Lcuda;
     Lcuda_bin(Lcuda >= 1) = 1;
-    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[CUDA]',sum( double(BIN(:))-Lcuda_bin(:) )  );
+    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[CUDA]',sum( double(BIN(:))-Lcuda_bin(:))  );
     fprintf('...end\n')
 % end
 %% [deep] compare histogram consistency, object-by-object
