@@ -78,8 +78,9 @@ __device__ unsigned int fBDY_cross(unsigned int HEIGHT){ // NOTE: I'm assuming t
 #define						Vo							1		// object value
 #define						Vb							0		// object value
 const bool					relabel						= true; // decide if relabel objects from 1 to N
-static const unsigned int 	threads 					= 512;	//[reduce6] No of threads working in single block
-static const unsigned int 	blocks 						= 64;	//[reduce6] No of blocks working in grid (this gives also the size of output Perimeter, to be summed outside CUDA)
+const bool 					printme						= false;// print intermediate outputs by single kernels
+static const unsigned int 	threads 					= 512;	//[histogram,intratile_relabel_1toN] No of threads working in single block
+//static const unsigned int 	blocks 						= 64;	//[reduce6] No of blocks working in grid (this gives also the size of output Perimeter, to be summed outside CUDA)
 const char 					*BASE_PATH					= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing";
 char						buffer[255];
 // I/-
@@ -104,12 +105,20 @@ const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soi
 // size=[8000, 8000]
 //const char 		*FIL_ROI		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels_roi.tif";
 //const char 		*FIL_BIN		= "/home/giuliano/git/cuda/perimeter/data/imp_mosaic_char_2006_cropped_64kpixels.tif";
+// size=[64366, 49958]
+//const char 		*FIL_ROI		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006.tif";
+//const char 		*FIL_BIN		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006.tif";
+
 
 
 // -/O
 const char		*Lcuda		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/CUDA-code.txt";
 const char		*Lhist		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/cu_histogram.txt";
 const char 		*FIL_LAB 	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/LAB-MAT-cuda.tif";
+const char		*Lcuda_rand	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/Lcuda_random.tif";
+const char		*FIL_IDra   = "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ID_rand_cpu.txt";
+const char		*FIL_ID1N   = "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ID_1toN_cpu.txt";
+
 // kernel_names
 const char 		*kern_1 	= "intra_tile_labeling";
 const char 		*kern_2 	= "stitching_tiles";
@@ -119,7 +128,7 @@ const char 		*kern_4_a 	= "count_labels";
 const char 		*kern_4_b 	= "labels__1_to_N";
 const char 		*kern_4_c 	= "intratile_relabel_1toN";
 const char 		*kern_5 	= "del_duplicated_lines";
-const char 		*kern_6 	= "reduce6_hist";
+const char 		*kern_6 	= "histogram";
 
 //---------------------------- FUNCTIONS PROTOTYPES
 //		** I/O **
@@ -362,9 +371,8 @@ delete_file( const char *file_name )
 {
    int status = remove(file_name);
 
-   if( status == 0 )
-      printf("%s file deleted successfully.\n",file_name);
-   else
+   if/*( status == 0 )printf("%s file deleted successfully.\n",file_name);
+   else*/ ( status != 0 )
    {
       printf("Unable to delete the file %s\n", file_name);
       perror("Error");
@@ -840,12 +848,14 @@ count_labels( 	unsigned int WIDTH, unsigned int HEIGHT,
 	}
 }
 __global__ void
-labels__1_to_N( unsigned int WIDTH, 	unsigned int HEIGHT,
-				unsigned int *lab_mat, 	unsigned int *cumsum,
-				unsigned int kmax_e, 	unsigned int bdx_end,
-				unsigned int *ID_rand, 	unsigned int *ID_1toN){
+labels__1_to_N( unsigned int WIDTH, 		unsigned int HEIGHT,
+				const unsigned int *lab_mat,unsigned int *lab_mat_1N,
+				unsigned int *cumsum,
+				unsigned int kmax_e, 		unsigned int bdx_end,
+				unsigned int *ID_rand, 		unsigned int *ID_1toN){
 	/**
 	 * 	This kernel writes in lab_mat[tid]=tid an ID values such that all IDs are between [1,Nbins].
+	 * 	The newly written ID must be propagated
 	 */
 	unsigned int r 			= threadIdx.y;
 	unsigned int c 			= threadIdx.x;
@@ -899,19 +909,20 @@ labels__1_to_N( unsigned int WIDTH, 	unsigned int HEIGHT,
 						ii = row*bdx_act+col;
 						ID_rand[k] = lab_mat[ttid+ii];
 						ID_1toN[k] = k+1;
-						lab_mat[ttid+ii] = k+1;
+						//lab_mat[ttid+ii] = k+1;
+						lab_mat_1N[ttid+ii] = k+1;
 						k+=1;
-						//lab_mat[ttid+ii] = k;
 					}
 				}
 			}
 		}
+		//for(ii=cumsum[big];ii<k;ii++) if(lab_mat[ttid]==ID_rand[k]) lab_mat[ttid]=ID_1toN[k]; // ––> this must be managed in a specific kernel applying all found IDs
 	}
 }
 __global__ void
-intratile_relabel_1toN_notgood(	unsigned int WIDTH_e, unsigned int HEIGHT_e,
-						unsigned int *lab_mat, unsigned int *cumsum, unsigned int Nbins,
-						const unsigned int *ID_rand, const unsigned int *ID_1toN ){
+intratile_relabel_1toN_notgood( unsigned int WIDTH_e, unsigned int HEIGHT_e,
+								unsigned int *lab_mat, unsigned int *cumsum, unsigned int Nbins,
+								const unsigned int *ID_rand, const unsigned int *ID_1toN ){
 	/**
 	 * 	This kernel assign to each pixel the value of the root ID written where
 	 * 	lab_mat[tid] is equal to tid.
@@ -957,7 +968,110 @@ intratile_relabel_1toN_notgood(	unsigned int WIDTH_e, unsigned int HEIGHT_e,
 	}
 }
 __global__ void
-intratile_relabel_1toN(unsigned int WIDTH_e, unsigned int HEIGHT_e, unsigned int *lab_mat){
+intratile_relabel_1toN_notgood2(unsigned int WIDTH_e, unsigned int HEIGHT_e, unsigned int *lab_mat){
+	/**
+	 * 	This kernel assign to each pixel the value of the root ID written where
+	 * 	lab_mat[tid] is equal to tid. But since now I wrote and ID spanning from
+	 * 	1 to N, I have to skip the writing of all lab_mat[tid]=tid locations!!
+	 */
+
+	unsigned int r 			= threadIdx.y;
+	unsigned int c 			= threadIdx.x;
+	unsigned int bdx		= blockDim.x;
+	unsigned int bdy		= blockDim.y;
+	unsigned int bix		= blockIdx.x;
+	unsigned int biy		= blockIdx.y;
+//	unsigned int gdx		= gridDim.x;
+//	unsigned int gdy		= gridDim.y;
+	unsigned int tix		= bdx*bix + c;	// horizontal 	offset
+	unsigned int tiy		= bdy*biy + r;	// vertical 	offset
+
+//	unsigned int otid		= bdx * r + c;
+
+	unsigned int y_offset	= (WIDTH_e*bdy*biy);
+	unsigned int x_offset	= (bdx*fBDY(HEIGHT_e)*bix);
+	unsigned int blk_offset	= (fBDX(WIDTH_e)*r+c);
+	unsigned int ttid		= y_offset + x_offset + blk_offset;
+
+	if( tix<WIDTH_e && tiy<HEIGHT_e )// iTile<gdx*gdy
+	{
+		if(lab_mat[ttid]!=Vb && lab_mat[lab_mat[ttid]]!=Vb)  lab_mat[ttid]=lab_mat[lab_mat[ttid]];
+	}
+}
+
+__global__ void
+intratile_relabel_1toN_notgood3(	unsigned int map_len, unsigned int Nbins,
+						const unsigned int *ID_rand, const unsigned int *ID_1toN,
+						unsigned int *lab_mat	){
+    unsigned int tid 		= threadIdx.x;
+    unsigned int bix 		= blockIdx.x;
+    unsigned int bdx 		= blockDim.x;
+    unsigned int gdx 		= gridDim.x;
+    unsigned int i 			= bix*bdx + tid;
+    unsigned int gridSize 	= bdx*gdx;
+    unsigned int ii			= 0;
+    unsigned int jj			= 0;
+    bool 		 snew;
+    bool 		 I_am_in_error;
+    extern 	__shared__ unsigned int 	sdata[];
+    		__shared__ unsigned int 	sunique[512];
+    		__shared__ unsigned int 	sindex[512];
+    		__shared__ unsigned int 	n;
+
+	sdata[tid] = 0; __syncthreads();
+    while (i < map_len){
+    	sdata[tid] = lab_mat[i]; __syncthreads();
+
+    	// The algorithm of duplicates removal was inspired by the code reported here :: http://stackoverflow.com/questions/1532819/algorithm-efficient-way-to-remove-duplicate-integers-from-an-array
+    	if(tid==0){
+    		n = 0;
+    		//unsigned int act_bdx = (map_len-i<bdx)? map_len-i : bdx;// not bdx but the residual pixels considering the handling of the last block of size < bdx!
+    		for(ii=0;ii<bdx;ii++){
+    			snew = true;
+    			if(sdata[ii]!=Vb){
+
+    				// was the label already stored in sunique? (yes:snew==false), (no:snew==true)––––––|
+    				jj=n;//																				|
+    				while(jj>0 && snew==true){//														|
+    					jj--;//																			|
+						if(sunique[jj]==sdata[ii]){//													|
+							snew = false;//																|
+						}//																				|
+    				}//													   <––––––––––––––––––––––––––––|
+
+    				// if the label is new...
+    				if(snew==true){
+    					sunique[n]=sdata[ii];// store the new label found
+
+    					I_am_in_error = false;
+    					// find the index in ID_rand where the newly found label is stored:		––––––––|
+    					for(jj=0;jj<Nbins;jj++){//														|
+    						if(ID_rand[jj]==sunique[n]){//												|
+    							snew=false;//															|
+        						sindex[n] = jj;//														|
+        						n++;//																	|
+    						}//																			|
+    					}//													<–––––––––––––––––––––––––––|
+    					if(snew==false)
+    						I_am_in_error = true;
+    				}
+    			}
+    		}
+    	}
+    	//for(ii=0;ii<Nbins;ii++) if(lab_mat[i]==ID_rand[ii]) sdata[tid]=ID_1toN[ii]; //__syncthreads();
+    	for(ii=0;ii<=n;ii++){
+    		if(lab_mat[i]==ID_rand[sindex[ii]]){
+    			sdata[tid]=ID_1toN[sindex[ii]];
+    			__syncthreads();
+    		}
+    	}
+    	lab_mat[i] = sdata[tid]; __syncthreads();
+        i += gridSize;
+    }
+}
+
+__global__ void
+intratile_relabel_1toN(unsigned int WIDTH_e, unsigned int HEIGHT_e, const unsigned int *lab_mat, unsigned int *lab_mat_1N){
 	/**
 	 * 	This kernel assign to each pixel the value of the root ID written where
 	 * 	lab_mat[tid] is equal to tid.
@@ -989,9 +1103,10 @@ intratile_relabel_1toN(unsigned int WIDTH_e, unsigned int HEIGHT_e, unsigned int
 
 	if( tix<WIDTH_e && tiy<HEIGHT_e )// iTile<gdx*gdy
 	{
-		if(lab_mat[ttid]!=Vb && lab_mat[lab_mat[ttid]]!=Vb)  lab_mat[ttid]=lab_mat[lab_mat[ttid]];
+		if(lab_mat[ttid]!=Vb)  lab_mat_1N[ttid]=lab_mat_1N[lab_mat[ttid]];
 	}
 }
+
 __global__ void
 del_duplicated_lines( 	const unsigned int *lab_mat_gpu,	unsigned int WIDTH_e,unsigned int HEIGHT_e,
 							  unsigned int *lab_mat_gpu_f,	unsigned int WIDTH,	 unsigned int HEIGHT	){
@@ -1027,7 +1142,7 @@ del_duplicated_lines( 	const unsigned int *lab_mat_gpu,	unsigned int WIDTH_e,uns
 
 template <class T, unsigned int blockSize, bool nIsPow2>
 __global__ void
-reduce6_hist___original(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
 {
 	/*  x---bdx*mapel_per_thread----x
 	 * 	 ___________________________ __...
@@ -1065,7 +1180,7 @@ reduce6_hist___original(const T *g_idata, const unsigned char *ROI, T *g_ohist, 
     unsigned int i 			= bix*blockSize*2 + tid;
     unsigned int gridSize 	= blockSize*2*gdx;
     unsigned int j			= 0;
-    unsigned int offset 	= 0;
+    unsigned int offset;
 
     T 			 *mySum;
     T			 locSum;
@@ -1132,37 +1247,9 @@ reduce6_hist___original(const T *g_idata, const unsigned char *ROI, T *g_ohist, 
 
 template <class T>
 __global__ void
-reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+histogram_shmem(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
 {
-	/*  x---bdx*mapel_per_thread----x
-	 * 	 ___________________________ __...
-	 * 	|___________________________|__...		*g_idata
-	 *
-	 * 	 ___ ___ ___ ___ ___ ___ ___ __...
-	 * 	|___|___|___|___|___|___|___|__...		*g_idata
-	 * 	x---x
-	 * 	 bdx
-	 * 	|   \
-	 * 	|    \____________________
-	 * 	|     					  |				 -zoom in g_idata to highlight how sdata works.
-	 * 	x-----------bdx-----------x				 -bdx=threads
-	 * 	 _ _ _ _ _ _ _ _ _ _ _ _ _ _...
-	 * 	|_|_|_|_|_|_|_|_|_|_|_|_|_|_...			sdata   _
-	 * 	 						  			     -each |_| is an element of sdata in which mapel_per_thread pixels are summed up by one tid.
-	 * 	 ____________  x
-	 * 	|            | |
-	 *  | *sdata     | Nbins					 -the mapel_per_thread pixels are summed up by tid and written using this offset:
-	 *  |            | |							offset = j*bdx + tid; where j=1,...,Nbins.
-	 *  |____________| x						 -each tid is in charge of its column number in sdata.
-	 *											 -each row in sdata represents a bin "j" within Nbins.
-	 *  x--threads---x
-	 */
-    //T *sdata = SharedMemory<T>();// size = bdx * Nbins
-    // sdata_j
-	extern __shared__ unsigned int sdata[];
 
-    // perform first level of reduction,
-    // reading from global memory, writing to shared memory
     unsigned int tid 		= threadIdx.x;
     unsigned int bix 		= blockIdx.x;
     unsigned int bdx 		= blockDim.x;
@@ -1171,37 +1258,43 @@ reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned in
     unsigned int gridSize 	= bdx*gdx;
     unsigned int j			= 0;
 
-    for(j=0;j<=Nbins;j++) if(tid==0) sdata[j]=0; //sdata[j*bdx+tid]=0;
+    extern __shared__ unsigned int sdata[];
 
-    // we reduce multiple elements per thread.  The number is determined by the
-    // number of active thread blocks (via gridDim).  More blocks will result
-    // in a larger gridSize and therefore fewer elements per thread
+    for(j=0;j<Nbins;j++) if(tid==0) sdata[j]=0;
+
     while (i < map_len)
     {
-    	atomicAdd( &sdata[ g_idata[i] ], ROI[i] );//ROI[i] instead of 1
+    	atomicAdd( &sdata[ g_idata[i] ], ROI[i] ); __syncthreads();
         i += gridSize;
     }
     __threadfence_system();
-    __syncthreads();
+    //__syncthreads();
 
-    /*
-     * Now I have sdata that stores for each bin "j" in Nbins (y-axis) the sum of ID=j of object "j"
-     * for each of the tid threads (x-axis) in current block.
-     * The next step (i.e. the for loop on j) has to reduce each row of sdata so that each block
-     * gives the histogram of its bdx*mapel_per_thread pixels.
-     *
-     * 	 ____________  x
-	 * 	|            | |
-	 *  | *sdata     | Nbins
-	 *  |            | |
-	 *  |____________| x
-	 *
-	 *  x--threads---x
-	 */
-    for(j=0;j<=Nbins;j++){// start from j=1, to avoid the computation of background
+    for(j=0;j<Nbins;j++){// start from j=1, to avoid the computation of background
 	    // write result for this block to global memory
-		//if (tid == 0) g_odata[blockIdx.x] = sdata[0];
-	    if (tid == 0) atomicAdd( &g_ohist[j], sdata[j] );//cannot understand why NVidia does not put smem instead of sdata!!!
+	    if (tid == 0) atomicAdd( &g_ohist[j], sdata[j] );
+    }
+    // I have to loop on available tids to solve the following instead of let working only one tid=0!!!
+    //if (tid < Nbins) atomicAdd( &g_ohist[tid], sdata[tid] );
+}
+
+template <class T>
+__global__ void
+histogram(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+{
+
+    unsigned int tid 		= threadIdx.x;
+    unsigned int bix 		= blockIdx.x;
+    unsigned int bdx 		= blockDim.x;
+    unsigned int gdx 		= gridDim.x;
+    unsigned int i 			= bix*bdx + tid;
+    unsigned int gridSize 	= bdx*gdx;
+    unsigned int j			= 0;
+
+    while (i < map_len)
+    {
+    	atomicAdd( &g_ohist[ g_idata[i] ], ROI[i] );
+        i += gridSize;
     }
 }
 
@@ -1217,15 +1310,15 @@ int main(int argc, char **argv){
 	 */
 	delete_file( FIL_LAB );
 	delete_file( Lhist );
-
+	delete_file( FIL_IDra );
+	delete_file( FIL_ID1N );
 
 	// Parameter:
 	const unsigned int 	NTHREADSX 			= 32;
 
 	// DECLARATIONS:
-	unsigned int		ii,Nbins;
-	bool 				printme				= false;
-	unsigned int  		*lab_mat_cpu, *lab_mat_gpu, *lab_mat_cpu_f, *lab_mat_gpu_f, *bins_cpu,/* *ones_gpu,*/ *bins_gpu, *cumsum, *ID_rand_gpu, *ID_1toN_gpu;
+	unsigned int		ii,Nbins,Nbins_0;
+	unsigned int  		*lab_mat_cpu, *lab_mat_gpu, *lab_mat_gpu_1N, *lab_mat_cpu_f, *lab_mat_gpu_f, *bins_cpu,/* *ones_gpu,*/ *bins_gpu, *cumsum, *ID_rand_gpu, *ID_1toN_gpu;
 	unsigned char 		*urban_gpu,*dev_ROI;
 	unsigned int 		*h_histogram, *d_histogram;// it's size is equal to the number of blocks within grid!
 	metadata 			MDbin,MDuint,MDroi;
@@ -1307,6 +1400,8 @@ int main(int argc, char **argv){
 	// -4- lab_mat_gpu  -- stream[1]
 	CUDA_CHECK_RETURN( cudaMalloc( (void **)&lab_mat_gpu, 	sizeUintL_e ) );
 	CUDA_CHECK_RETURN( cudaMemset( lab_mat_gpu, 0, 			sizeUintL_e ) );
+	CUDA_CHECK_RETURN( cudaMalloc( (void **)&lab_mat_gpu_1N,sizeUintL_e ) );
+	CUDA_CHECK_RETURN( cudaMemset( lab_mat_gpu_1N, 0, 		sizeUintL_e ) );
 	CUDA_CHECK_RETURN( cudaMalloc( (void **)&lab_mat_gpu_f, sizeUintL_s ) );
 	CUDA_CHECK_RETURN( cudaMemset( lab_mat_gpu_f,0, 		sizeUintL_s ) );
 	// -5- bins
@@ -1346,7 +1441,11 @@ int main(int argc, char **argv){
 	dim3 	grid_2(ntilesX,ntilesY,1);
 	dim3 	block_3(tiledimX*tiledimY,1,1);
 	dim3 	grid_3(ntilesX*ntilesY,1,1);
-	// reduce6
+	// intratile_relabel_1toN & histogram
+	num_blocks_per_SM	= max_threads_per_SM / threads;// e.g. 1536/512 = 3
+	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((threads)*N_sm*num_blocks_per_SM) );// e.g. n / (14*3*512*2)
+	dim3 	dimBlock( threads, 1, 1 );
+	dim3 	dimGrid(  N_sm*num_blocks_per_SM,  1, 1 );
 
 	/* ....::: [1/5 stage] INTRA-TILE :::.... */
 	start_t = clock();
@@ -1356,12 +1455,15 @@ int main(int argc, char **argv){
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_1,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
 	if (printme){
-		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
+/*		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_1);
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
 		sprintf(buffer,"%s/data/-%d-%s__k1.txt",BASE_PATH,count_print,kern_1);
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
-		//write_labmat_tiled_without_duplicated_LINES(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
+*/		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
+		sprintf(buffer,"%s/data/-%d-%s__k1.tif",BASE_PATH,count_print,kern_1);
+		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [1/5 stage] :::.... */
@@ -1374,11 +1476,15 @@ int main(int argc, char **argv){
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_2,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
 	if (printme){
-		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
+/*		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_2);
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
 		sprintf(buffer,"%s/data/-%d-%s__k2.txt",BASE_PATH,count_print,kern_2);
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
+*/		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
+		sprintf(buffer,"%s/data/-%d-%s__k2.tif",BASE_PATH,count_print,kern_2);
+		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
@@ -1389,11 +1495,15 @@ int main(int argc, char **argv){
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_3,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
 	if (printme){
-		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
+/*		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_3);
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
 		sprintf(buffer,"%s/data/-%d-%s__k3.txt",BASE_PATH,count_print,kern_3);
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
+*/		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
+		sprintf(buffer,"%s/data/-%d-%s__k3.tif",BASE_PATH,count_print,kern_3);
+		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [2/5 stage] :::.... */
@@ -1406,15 +1516,25 @@ int main(int argc, char **argv){
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_4,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
 	if (printme){
-		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost ) );
+/*		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost ) );
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4);
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
+*/		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
+		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4);
+		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [3/5 stage] :::.... */
 
+	/* ..... save image with random labels as reference in MatLab comparison ..... */
+	del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+	CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
+	geotiffwrite(FIL_BIN,Lcuda_rand,MDuint,lab_mat_cpu_f);
+	/* ..... save image with random labels as reference in MatLab comparison ..... */
+
 if (relabel){
-	/* ....::: [4/5 stage] DEL DUPLICATES :::.... */
+	/* ....::: [4/5 stage] RELABEL FROM 1 TO N :::.... */
 	start_t = clock();
 	count_labels<<<grid,block,sh_mem>>>(WIDTH_e,HEIGHT_e,lab_mat_gpu,bins_gpu);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
@@ -1429,8 +1549,14 @@ if (relabel){
 		//cumsum[ii] = cumsum[ii-1] + bins_cpu[ii-1];
 		//if(bins_cpu[ii]!=0) printf("%4d %12d %12d\n", ii, bins_cpu[ii], cumsum[ii] );
 	}
+	Nbins_0 = Nbins +1;// I count also the ZERO!
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_4_a,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4_a);
+		write_labmat_full(bins_cpu, ntilesY*ntilesX, 1, buffer);
+	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
 	start_t = clock();
@@ -1438,12 +1564,21 @@ if (relabel){
 	CUDA_CHECK_RETURN( cudaMalloc( (void **)&ID_1toN_gpu,Nbins*sizeof(unsigned int) ) );
 	CUDA_CHECK_RETURN( cudaMemcpy( bins_gpu, cumsum, sizeBins, cudaMemcpyHostToDevice ) );
 	unsigned int bdx_e 	= WIDTH_e  - (ntilesX-1)*tiledimX;
-	//unsigned int kmax_e = bins_cpu[ntilesX*ntilesY-1];
-	unsigned int kmax_e = Nbins;//cumsum[ntilesX*ntilesY-1];
-	labels__1_to_N<<<grid,block,sh_mem>>>( WIDTH_e, HEIGHT_e, lab_mat_gpu, bins_gpu, kmax_e, bdx_e, ID_rand_gpu, ID_1toN_gpu );
+	labels__1_to_N<<<grid,block,sh_mem>>>( WIDTH_e, HEIGHT_e, lab_mat_gpu, lab_mat_gpu_1N, bins_gpu, Nbins, bdx_e, ID_rand_gpu, ID_1toN_gpu );
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_4_b,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	/* check consistency of random and 1-to-N labels */
+	if(1){// always print, because they are used by MatLab for checking purpose!
+		unsigned int *ID_rand_cpu, *ID_1toN_cpu;
+		CUDA_CHECK_RETURN( cudaMallocHost(&ID_rand_cpu, Nbins*sizeof(unsigned int)) );
+		CUDA_CHECK_RETURN( cudaMallocHost(&ID_1toN_cpu, Nbins*sizeof(unsigned int)) );
+		CUDA_CHECK_RETURN( cudaMemcpy( ID_rand_cpu,ID_rand_gpu,	Nbins*sizeof(unsigned int),cudaMemcpyDeviceToHost ) );
+		CUDA_CHECK_RETURN( cudaMemcpy( ID_1toN_cpu,ID_1toN_gpu,	Nbins*sizeof(unsigned int),cudaMemcpyDeviceToHost ) );
+		write_labmat_full(ID_rand_cpu, Nbins, 1, FIL_IDra);
+		write_labmat_full(ID_1toN_cpu, Nbins, 1, FIL_ID1N);
+	}
+
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
 	if (printme){
 		//tmp code :: save as GeoTiff
@@ -1462,18 +1597,23 @@ if (relabel){
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
 	start_t = clock();
-	//intratile_relabel_1toN_notgood<<<grid,block,sh_mem>>>(	WIDTH_e, HEIGHT_e, lab_mat_gpu, bins_gpu, Nbins, ID_rand_gpu, ID_1toN_gpu );
-	intratile_relabel_1toN<<<grid,block,sh_mem>>>(WIDTH_e,HEIGHT_e,lab_mat_gpu);
+	// //intratile_relabel_1toN_notgood<<<grid,block,sh_mem>>>(	WIDTH_e, HEIGHT_e, lab_mat_gpu, bins_gpu, Nbins, ID_rand_gpu, ID_1toN_gpu );
+	//intratile_relabel_1toN_notgood2<<<grid,block,sh_mem>>>(WIDTH_e,HEIGHT_e,lab_mat_gpu);
+	//int smemSize 		= (threads) * sizeof(unsigned int);// sdata=threads*Nbins is allocated dinamically, while sdata_j=threads*1 and is allocated statically
+	//intratile_relabel_1toN_notgood3<<<dimGrid,dimBlock,smemSize>>>(WIDTH_e*HEIGHT_e,Nbins,ID_rand_gpu, ID_1toN_gpu,lab_mat_gpu);
+	intratile_relabel_1toN<<<grid,block,sh_mem>>>(WIDTH_e,HEIGHT_e,lab_mat_gpu,lab_mat_gpu_1N);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_4_c,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
-	/* INTERMEDIATE CHECK [activate/deactivate]*/
-	if (printme){
-		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu,	sizeUintL_e,cudaMemcpyDeviceToHost) );
-		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4_c);
+	// INTERMEDIATE CHECK [activate/deactivate]
+	if (1){
+		CUDA_CHECK_RETURN( cudaMemcpy(lab_mat_cpu,lab_mat_gpu_1N,	sizeUintL_e,cudaMemcpyDeviceToHost) );
+/*		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4_c);
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
 		sprintf(buffer,"%s/data/-%d-%s__k3.txt",BASE_PATH,count_print,kern_4_c);
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
+*/		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_4_c);
+		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [4/5 stage] :::.... */
@@ -1481,13 +1621,13 @@ if (relabel){
 
 	/* ....::: [5/5 stage] :::.... */
 	start_t = clock();
-	del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+	del_duplicated_lines<<<grid,block>>>(lab_mat_gpu_1N,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_5,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
-	if (1){
+	if (printme){
 		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_5);
 		//write_labmat_full(lab_mat_cpu_f, HEIGHT, WIDTH, buffer);
 		geotiffwrite(FIL_BIN,FIL_LAB,MDuint,lab_mat_cpu_f);
@@ -1495,30 +1635,37 @@ if (relabel){
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [5/5 stage] :::.... */
 
+	//write_labmat_matlab(lab_mat_cpu, tiledimX, tiledimY, ntilesX, ntilesY, Lcuda);
+	geotiffwrite(FIL_BIN,FIL_LAB,MDuint,lab_mat_cpu_f);
+
 if (relabel){
 	/* ....::: [6/5 stage] :::.... */
 	// -7- histogram
-	CUDA_CHECK_RETURN( cudaMallocHost( 	(void **)&h_histogram,	Nbins*sizeof( unsigned int )) );
-	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&d_histogram,  Nbins*sizeof( unsigned int )) );
-	CUDA_CHECK_RETURN( cudaMemset( 		d_histogram, 0, 		Nbins*sizeof( unsigned int )) );
-
-	int BLOCK_DIM 		= 512;
-	num_blocks_per_SM	= max_threads_per_SM / BLOCK_DIM;// e.g. 1536/512 = 3
-	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((BLOCK_DIM)*N_sm*num_blocks_per_SM) );// e.g. n / (14*3*512*2)
-	dim3 	dimBlock( threads, 1, 1 );
-	dim3 	dimGrid(  N_sm*num_blocks_per_SM,  1, 1 );
-	int smemSize 		= (Nbins+1) * sizeof(unsigned int);// sdata=threads*Nbins is allocated dinamically, while sdata_j=threads*1 and is allocated statically
+	CUDA_CHECK_RETURN( cudaMallocHost( 	(void **)&h_histogram,	Nbins_0*sizeof( unsigned int )) );
+	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&d_histogram,  Nbins_0*sizeof( unsigned int )) );
+	CUDA_CHECK_RETURN( cudaMemset( 		d_histogram, 0, 		Nbins_0*sizeof( unsigned int )) );
+	int smemSize0 			= (Nbins_0) * sizeof(unsigned int);
+	int sharedMemPerBlock	= devProp.sharedMemPerBlock;
 	start_t = clock();
 	// I/O config of reduce6_hist ––> (*g_idata, *ROI, *g_ohist, map_len, mapel_per_thread, Nbins)
 /*	if (isPow2(map_len)){ reduce6_hist<unsigned int, 512, true> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
 	}else{	 			  reduce6_hist<unsigned int, 512, false><<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);}
-*/	reduce6_hist<unsigned int> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
+*/	if(smemSize0 < sharedMemPerBlock ){
+		histogram_shmem<unsigned int> <<<dimGrid,dimBlock,smemSize0>>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins_0);
+		kern_6 = "histogram_shmem";
+	}else{
+		histogram<unsigned int> <<<dimGrid,dimBlock>>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins_0);
+	}
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_6,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
-	CUDA_CHECK_RETURN( cudaMemcpy(h_histogram,d_histogram,	(size_t)Nbins*sizeof( unsigned int ),cudaMemcpyDeviceToHost) );
+	CUDA_CHECK_RETURN( cudaMemcpy(h_histogram,d_histogram,	(size_t)Nbins_0*sizeof( unsigned int ),cudaMemcpyDeviceToHost) );
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [6/5 stage] :::.... */
+
+	// SAVE histogram
+	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"cu_histogram");
+	write_labmat_full(h_histogram, Nbins_0, 1, buffer);
 }
 
 	/* DO NOT EDIT THE FOLLOWING PRINT (it's used in MatLab to catch the elapsed time!)*/
@@ -1526,13 +1673,7 @@ if (relabel){
 	printf("_______________________________________________\n");
 	printf("  %24s\t%6d [msec]\n", "Total time:",elapsed_time );
 
-	// SAVE lab_mat to file and compare with MatLab
-	//write_labmat_matlab(lab_mat_cpu, tiledimX, tiledimY, ntilesX, ntilesY, Lcuda);
-	geotiffwrite(FIL_BIN,FIL_LAB,MDuint,lab_mat_cpu_f);
-	// SAVE histogram
-	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"cu_histogram");
-	write_labmat_full(h_histogram, Nbins+1, 1, buffer);
-
+	// update performance sheet:
 	FILE *fid;
 	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"performance");
 	fid = fopen(buffer,"a");
@@ -1545,14 +1686,19 @@ if (relabel){
 	cudaFreeHost(lab_mat_cpu_f);
 	cudaFreeHost(lab_mat_cpu);
 	cudaFreeHost(urban_cpu);
+	cudaFreeHost(ROI);
+	cudaFreeHost(h_histogram);
 	cudaFree(lab_mat_gpu_f);
 	cudaFree(lab_mat_gpu);
+	cudaFree(lab_mat_gpu_1N);
 	cudaFree(urban_gpu);
+	cudaFree(dev_ROI);
+	cudaFree(d_histogram);
 
 	// Destroy context
 	CUDA_CHECK_RETURN( cudaDeviceReset() );
 
-	printf("\n\n%s\n", "Finished!!");
+	printf("\n%s\n", "Finished!!");
 
 	// RETURN:
 	return 0;
