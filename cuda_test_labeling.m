@@ -65,9 +65,9 @@ deep_check      = 0; % Do you want to perform a deep comparison?
 tiledimX        = 32;  % 512 - 32 - 30
 tiledimY        = 32;  % 2   - 32 - 30
 % number of tiles in XY:
-ntilesX         = 335;
+ntilesX         = 435;
 ntilesY         = 383;
-threshold       = 0.7300; % set image sparsity: near 0 high density, near 1 high sparsity
+threshold       = 0.8300; % set image sparsity: near 0 high density, near 1 high sparsity
 %% set dim:
 if create_bin
 % NOTE:

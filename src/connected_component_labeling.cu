@@ -77,12 +77,14 @@ __device__ unsigned int fBDY_cross(unsigned int HEIGHT){ // NOTE: I'm assuming t
 // GLOBAL VARIABLES
 #define						Vo							1		// object value
 #define						Vb							0		// object value
+#define 					max(a,b) 					((a)>(b)?(a):(b))
 const bool					relabel						= true; // decide if relabel objects from 1 to N
 const bool 					printme						= false;// print intermediate outputs by single kernels
 static const unsigned int 	threads 					= 512;	//[histogram,intratile_relabel_1toN] No of threads working in single block
 //static const unsigned int 	blocks 						= 64;	//[reduce6] No of blocks working in grid (this gives also the size of output Perimeter, to be summed outside CUDA)
 const char 					*BASE_PATH					= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing";
 char						buffer[255];
+
 // I/-
 // create on-the-fly in MatLab
 const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_BIN.tif";
@@ -847,6 +849,7 @@ count_labels( 	unsigned int WIDTH, unsigned int HEIGHT,
 		if(tid==0)	bins[big] = sh_sum[tid];
 	}
 }
+
 __global__ void
 labels__1_to_N( unsigned int WIDTH, 		unsigned int HEIGHT,
 				const unsigned int *lab_mat,unsigned int *lab_mat_1N,
@@ -919,6 +922,7 @@ labels__1_to_N( unsigned int WIDTH, 		unsigned int HEIGHT,
 		//for(ii=cumsum[big];ii<k;ii++) if(lab_mat[ttid]==ID_rand[k]) lab_mat[ttid]=ID_1toN[k]; // ––> this must be managed in a specific kernel applying all found IDs
 	}
 }
+
 __global__ void
 intratile_relabel_1toN_notgood( unsigned int WIDTH_e, unsigned int HEIGHT_e,
 								unsigned int *lab_mat, unsigned int *cumsum, unsigned int Nbins,
@@ -967,6 +971,7 @@ intratile_relabel_1toN_notgood( unsigned int WIDTH_e, unsigned int HEIGHT_e,
 		lab_mat[ttid] = lab_mat_sh[otid]; 		syncthreads();
 	}
 }
+
 __global__ void
 intratile_relabel_1toN_notgood2(unsigned int WIDTH_e, unsigned int HEIGHT_e, unsigned int *lab_mat){
 	/**
@@ -1289,7 +1294,6 @@ histogram(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int m
     unsigned int gdx 		= gridDim.x;
     unsigned int i 			= bix*bdx + tid;
     unsigned int gridSize 	= bdx*gdx;
-    unsigned int j			= 0;
 
     while (i < map_len)
     {
@@ -1297,6 +1301,59 @@ histogram(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int m
         i += gridSize;
     }
 }
+
+template <class T, unsigned int blockSize, bool nIsPow2>
+__global__ void
+reduce6_max(const T *g_idata, T *g_odata, unsigned int n)
+{
+    T *sdata = SharedMemory<T>();
+
+    // perform first level of reduction,
+    // reading from global memory, writing to shared memory
+    unsigned int tid 		= threadIdx.x;
+    unsigned int i 			= blockIdx.x*blockSize*2 + threadIdx.x;
+    unsigned int gridSize 	= blockSize*2*gridDim.x;
+
+    T myMax = 0;
+
+    // we reduce multiple elements per thread.  The number is determined by the
+    // number of active thread blocks (via gridDim).  More blocks will result
+    // in a larger gridSize and therefore fewer elements per thread
+    while (i < n)
+    {
+        myMax = max( myMax, g_idata[i] );
+        // ensure we don't read out of bounds -- this is optimised away for powerOf2 sized arrays
+        if (nIsPow2 || i + blockSize < n) myMax = max( myMax, g_idata[i+blockSize] );
+        i += gridSize;
+    }
+
+    // each thread puts its local sum into shared memory
+    sdata[tid] = myMax;
+    __syncthreads();
+
+    // do reduction in shared mem
+    if (blockSize >= 512) if (tid < 256) sdata[tid] = myMax = max( myMax, sdata[tid + 256] ); __syncthreads();
+    if (blockSize >= 256) if (tid < 128) sdata[tid] = myMax = max( myMax, sdata[tid + 128] ); __syncthreads();
+    if (blockSize >= 128) if (tid <  64) sdata[tid] = myMax = max( myMax, sdata[tid +  64] ); __syncthreads();
+    if (tid < 32)
+    {
+        // now that we are using warp-synchronous programming (below)
+        // we need to declare our shared memory volatile so that the compiler
+        // doesn't reorder stores to it and induce incorrect behaviour.
+        volatile T *smem = sdata;
+
+        if (blockSize >=  64) smem[tid] = myMax = max( myMax, smem[tid + 32] );
+        if (blockSize >=  32) smem[tid] = myMax = max( myMax, smem[tid + 16] );
+        if (blockSize >=  16) smem[tid] = myMax = max( myMax, smem[tid +  8] );
+        if (blockSize >=   8) smem[tid] = myMax = max( myMax, smem[tid +  4] );
+        if (blockSize >=   4) smem[tid] = myMax = max( myMax, smem[tid +  2] );
+        if (blockSize >=   2) smem[tid] = myMax = max( myMax, smem[tid +  1] );
+    }
+
+    // write result for this block to global mem
+    if (tid == 0) g_odata[blockIdx.x] = sdata[0];
+}
+
 
 /** I have two issues:
  * 		> ccl algorithm does not work for: (i) large images[false], (ii) too much compacted objects[?], (iii) BIN with all ones[true], (iv) small images[?]
@@ -1418,18 +1475,20 @@ int main(int argc, char **argv){
  *		KERNELS INVOCATION
  *
  *			*************************
- *			-1- intra_tile_labeling		|  --> 1st Stage :: intra-tile		:: mandatory
- *
- *			-2- stitching_tiles			|\
- *			-3- root_equivalence		|_|--> 2nd Stage :: inter-tiles		:: mandatory
- *
- *			-4- intra_tile_re_label		|  --> 3rd Stage :: intra-tile		:: mandatory
+ *			-1- intra_tile_labeling		|  ––> 1st Stage :: intra-tile		:: mandatory		––––|
+ *																									|
+ *			-2- stitching_tiles			|\															| *random CCL labeling*
+ *			-3- root_equivalence		|_|––> 2nd Stage :: inter-tiles		:: mandatory			|
+ *																									|
+ *			-4- intra_tile_re_label		|  ––> 3rd Stage :: intra-tile		:: mandatory		––––|
  *
  *			-5- count_labels			|\
- *			-6- labels__1_to_N			| |--> 4th Stage :: labels 1 to N	:: optional (set relabel)
- *			-7- intratile_relabel_1toN	|/
- *
- *			-8- del_duplicated_lines	|  --> 5th Stage :: adjust size		:: mandatory
+ *			-6- labels__1_to_N			| |––> 4th Stage :: labels 1 to N	:: mandatory #2		––––|
+ *			-7- intratile_relabel_1toN	|/															|
+ *																									| *size of each label*
+ *			-8- del_duplicated_lines	|  ––> 5th Stage :: adjust size		:: mandatory #2			|
+ *																									|
+ *			-9- histogram(_shmem)		|  ––> 6th Stage :: histogram		:: mandatory #2		––––|
  *
  *			*************************
  */
@@ -1443,7 +1502,8 @@ int main(int argc, char **argv){
 	dim3 	grid_3(ntilesX*ntilesY,1,1);
 	// intratile_relabel_1toN & histogram
 	num_blocks_per_SM	= max_threads_per_SM / threads;// e.g. 1536/512 = 3
-	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((threads)*N_sm*num_blocks_per_SM) );// e.g. n / (14*3*512*2)
+	unsigned int Nblks_per_grid = N_sm*num_blocks_per_SM;
+	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((threads*2)*Nblks_per_grid) );// e.g. n / (14*3*512*2)
 	dim3 	dimBlock( threads, 1, 1 );
 	dim3 	dimGrid(  N_sm*num_blocks_per_SM,  1, 1 );
 
@@ -1660,12 +1720,22 @@ if (relabel){
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_6,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	CUDA_CHECK_RETURN( cudaMemcpy(h_histogram,d_histogram,	(size_t)Nbins_0*sizeof( unsigned int ),cudaMemcpyDeviceToHost) );
-	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
-	/* ....::: [6/5 stage] :::.... */
-
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]
 	// SAVE histogram
 	sprintf(buffer,"%s/data/%s.txt",BASE_PATH,"cu_histogram");
 	write_labmat_full(h_histogram, Nbins_0, 1, buffer);
+	/* ....::: [6/5 stage] :::.... */
+
+	/* ....::: [7/5 stage ##INCOMPLETE##] :::.... */
+/*    // when there is only one warp per block, we need to allocate two warps
+    // worth of shared memory so that we don't index shared memory out of bounds
+    int smemSize = (threads <= 32) ? 2 * threads * sizeof(unsigned int) : threads * sizeof(unsigned int);
+	CUDA_CHECK_RETURN( cudaMallocHost( 	(void **)&h_max, Nbins_0*sizeof( unsigned int )) );
+	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&d_max, Nbins_0*sizeof( unsigned int )) );
+	CUDA_CHECK_RETURN( cudaMemset( 		d_max, 0, 		Nbins_0*sizeof( unsigned int )) );
+	if (isPow2(map_len)){ reduce6_max<double, 512, true> <<< dimGrid, dimBlock, smemSize >>>(d_histogram, d_max, map_len);
+	}else{	 			  reduce6_max<double, 512, false><<< dimGrid, dimBlock, smemSize >>>(d_histogram, d_max, map_len);}
+*/	/* ....::: [7/5 stage] :::.... */
 }
 
 	/* DO NOT EDIT THE FOLLOWING PRINT (it's used in MatLab to catch the elapsed time!)*/
