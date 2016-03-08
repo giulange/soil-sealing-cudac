@@ -122,6 +122,7 @@ const char		*FIL_IDra   = "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/s
 const char		*FIL_ID1N   = "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ID_1toN_cpu.txt";
 
 // kernel_names
+const char		*kern_0		= "filter_roi";
 const char 		*kern_1 	= "intra_tile_labeling";
 const char 		*kern_2 	= "stitching_tiles";
 const char 		*kern_3 	= "root_equivalence";
@@ -383,7 +384,23 @@ delete_file( const char *file_name )
 }
 
 __global__ void
-intra_tile_labeling(const unsigned char *urban,unsigned int WIDTH,unsigned int HEIGHT,unsigned int WIDTH_e,unsigned int HEIGHT_e,unsigned int *lab_mat)
+filter_roi( unsigned char *urban_gpu, const unsigned char *dev_ROI, unsigned int map_len){
+    unsigned int tid 		= threadIdx.x;
+    unsigned int bix 		= blockIdx.x;
+    unsigned int bdx 		= blockDim.x;
+    unsigned int gdx 		= gridDim.x;
+    unsigned int i 			= bix*bdx + tid;
+    unsigned int gridSize 	= bdx*gdx;
+
+    while (i < map_len)
+    {
+    	urban_gpu[i] *= dev_ROI[i];
+        i += gridSize;
+    }
+}
+
+__global__ void
+intra_tile_labeling(const unsigned char *urban,/*const unsigned char *ROI,*/ unsigned int WIDTH,unsigned int HEIGHT,unsigned int WIDTH_e,unsigned int HEIGHT_e,unsigned int *lab_mat)
 {
 	/*
 	 * 	*urban:		binary geospatial array;
@@ -423,7 +440,7 @@ intra_tile_labeling(const unsigned char *urban,unsigned int WIDTH,unsigned int H
 	{
 		lab_mat_sh[otid] 	= 0;
 		// if (r,c) is object pixel
-		if  (urban[itid]==Vo)  lab_mat_sh[otid] = ttid;
+		if  (urban[itid]==Vo/* & ROI[itid]==Vo*/)  lab_mat_sh[otid] = ttid /** ROI[itid]*/;
 		__syncthreads();
 
 		found = true;
@@ -1507,9 +1524,28 @@ int main(int argc, char **argv){
 	dim3 	dimBlock( threads, 1, 1 );
 	dim3 	dimGrid(  N_sm*num_blocks_per_SM,  1, 1 );
 
+
+	/* ....::: [0/5 stage] INTRA-TILE :::.... */
+	start_t = clock();
+	filter_roi<<<dimGrid,dimBlock>>>(urban_gpu,dev_ROI,map_len);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %20s\t%6d [msec]\n",count_print,kern_0,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	/* INTERMEDIATE CHECK [activate/deactivate]*/
+	if (printme){
+		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
+		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
+		sprintf(buffer,"%s/data/-%d-%s__k1.tif",BASE_PATH,count_print,kern_0);
+		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
+	}
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+	/* ....::: [0/5 stage] INTRA-TILE :::.... */
+
+
+
 	/* ....::: [1/5 stage] INTRA-TILE :::.... */
 	start_t = clock();
-	intra_tile_labeling<<<grid,block,sh_mem>>>(urban_gpu,WIDTH,HEIGHT_1,WIDTH_e,HEIGHT_e,lab_mat_gpu);
+	intra_tile_labeling<<<grid,block,sh_mem>>>(urban_gpu,/*dev_ROI,*/WIDTH,HEIGHT_1,WIDTH_e,HEIGHT_e,lab_mat_gpu);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_1,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));

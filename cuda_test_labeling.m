@@ -65,8 +65,8 @@ deep_check      = 0; % Do you want to perform a deep comparison?
 tiledimX        = 32;  % 512 - 32 - 30
 tiledimY        = 32;  % 2   - 32 - 30
 % number of tiles in XY:
-ntilesX         = 435;
-ntilesY         = 383;
+ntilesX         = 135;
+ntilesY         = 183;
 threshold       = 0.8300; % set image sparsity: near 0 high density, near 1 high sparsity
 %% set dim:
 if create_bin
@@ -476,13 +476,16 @@ end
     fprintf('Unrecognized pixels...\n');
     Lml_bin = Lml;
     Lml_bin(Lml >= 1) = 1;
-    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[MatLab]',sum( double(BIN(:))-Lml_bin(:)) );
+    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[MatLab]',sum( double(BIN(:)).*double(ROI(:)) -Lml_bin(:)) );
 
     Lcuda_bin = Lcuda;
     Lcuda_bin(Lcuda >= 1) = 1;
-    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[CUDA]',sum( double(BIN(:))-Lcuda_bin(:))  );
+    fprintf('Number of unrecognized object pixels: \t%10s%10d\n','[CUDA]',sum( double(BIN(:)).*double(ROI(:)) -Lcuda_bin(:))  );
     fprintf('...end\n')
 % end
+%% find unrecognized pixels
+DIFF    = double(BIN).*double(ROI) -Lcuda_bin;
+[r,c]   = find(DIFF);
 %% [deep] compare histogram consistency, object-by-object
 if deep_check
     Ucu = unique(Lcuda(:));
