@@ -79,16 +79,20 @@ __device__ unsigned int fBDY_cross(unsigned int HEIGHT){ // NOTE: I'm assuming t
 #define						Vb							0		// object value
 #define 					max(a,b) 					((a)>(b)?(a):(b))
 const bool					relabel						= true; // decide if relabel objects from 1 to N
-const bool 					printme						= false;// print intermediate outputs by single kernels
+const bool 					printme						= true; // print intermediate outputs by single kernels
 static const unsigned int 	threads 					= 512;	//[histogram,intratile_relabel_1toN] No of threads working in single block
 //static const unsigned int 	blocks 						= 64;	//[reduce6] No of blocks working in grid (this gives also the size of output Perimeter, to be summed outside CUDA)
 const char 					*BASE_PATH					= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing";
 char						buffer[255];
 
 // I/-
-// create on-the-fly in MatLab
-const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_BIN.tif";
-const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_ROI.tif";
+// created on-the-fly in MatLab
+//const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_BIN.tif";
+//const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_ROI.tif";
+// created on-the-fly over the SS-GCI
+const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ccl_1toN_hist_bin.tif";
+const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ccl_1toN_hist_roi.tif";
+
 // size=[300, 204]
 //const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/ROI.tif";
 //const char 		*FIL_BIN 		= "/home/giuliano/git/cuda/fragmentation/data/BIN.tif";
@@ -392,9 +396,28 @@ filter_roi( unsigned char *urban_gpu, const unsigned char *dev_ROI, unsigned int
     unsigned int i 			= bix*bdx + tid;
     unsigned int gridSize 	= bdx*gdx;
 
+    extern __shared__ unsigned char cpdata[];
+
+    //for(j=0;j<Nbins;j++) if(tid==0) sdata[j]=0;
+
     while (i < map_len)
     {
+    	// **with shared mem**//
+    	/*
+    	cpdata[tid]=0; __syncthreads();
+    	if( urban_gpu[i]==Vo && dev_ROI[i]==Vo) cpdata[tid]=Vo;
+    	__syncthreads();
+    	urban_gpu[i] = cpdata[tid]; __syncthreads();
+    	 */
+
+    	// **without** //
+    	//if( urban_gpu[i]==Vb | dev_ROI[i]==Vb) urban_gpu[i]=Vb;
+    	//if( urban_gpu[i]==Vo & dev_ROI[i]==Vo) urban_gpu[i]=Vo;
+    	//if( dev_ROI[i]==0) urban_gpu[i]=0;
+
+    	// **original** //
     	urban_gpu[i] *= dev_ROI[i];
+
         i += gridSize;
     }
 }
@@ -494,6 +517,7 @@ intra_tile_labeling(const unsigned char *urban,/*const unsigned char *ROI,*/ uns
 		__syncthreads();
 	}
 }
+
 template <unsigned int NTHREADSX>
 __global__ void
 stitching_tiles(	unsigned int *lab_mat,
@@ -826,8 +850,8 @@ count_labels( 	unsigned int WIDTH, unsigned int HEIGHT,
 	unsigned int gdx		= gridDim.x;
 //	unsigned int gdy		= gridDim.y;
 	unsigned int big		= biy*gdx + bix;	// block index on grid!
-	//unsigned int tid 		= bdx * r + c;
-	unsigned int tid 		= fBDX(WIDTH) * r + c;
+	unsigned int tid 		= bdx * r + c;
+	//unsigned int tid 		= fBDX(WIDTH) * r + c; // I commented this, because does not work on the right-most blocks on x!!
 	unsigned int tix		= bdx*bix + c;		// horizontal 	offset
 	unsigned int tiy		= bdy*biy + r;		// vertical 	offset
 
@@ -840,28 +864,28 @@ count_labels( 	unsigned int WIDTH, unsigned int HEIGHT,
 
 	extern __shared__ unsigned int sh_sum[];
 	//	-initialisation:
-	sh_sum[tid] = 0;									syncthreads();
+	sh_sum[tid] = 0;									__syncthreads();
 
 	if( tix<WIDTH && tiy<HEIGHT )
 	{
 		// 1.\ simple write operation
 		//	-ones:
-		if(lab_mat[ttid]==ttid) sh_sum[tid] = 1;		syncthreads();
+		if(lab_mat[ttid]==ttid) sh_sum[tid] = 1;		__syncthreads();
 		//	-the lab_mat[ttid]==ttid condition is not valid for label "ZERO":
-		if(ttid==0) sh_sum[tid] = 0;
+		if(ttid==0) sh_sum[tid] = 0;					__syncthreads();
 
 		// 2.\ reduction
 		//	-compute sum:
-		if(tid<512)	sh_sum[tid] += sh_sum[tid + 512];	syncthreads();
-		if(tid<256)	sh_sum[tid] += sh_sum[tid + 256];	syncthreads();
-		if(tid<128)	sh_sum[tid] += sh_sum[tid + 128];	syncthreads();
-		if(tid<64)	sh_sum[tid] += sh_sum[tid + 64];	syncthreads();
-		if(tid<32)	sh_sum[tid] += sh_sum[tid + 32];	syncthreads();
-		if(tid<16)	sh_sum[tid] += sh_sum[tid + 16];	syncthreads();
-		if(tid<8)	sh_sum[tid] += sh_sum[tid + 8];		syncthreads();
-		if(tid<4)	sh_sum[tid] += sh_sum[tid + 4];		syncthreads();
-		if(tid<2)	sh_sum[tid] += sh_sum[tid + 2];		syncthreads();
-		if(tid<1)	sh_sum[tid] += sh_sum[tid + 1];		syncthreads();
+		if(tid<512)	sh_sum[tid] += sh_sum[tid + 512];	__syncthreads();
+		if(tid<256)	sh_sum[tid] += sh_sum[tid + 256];	__syncthreads();
+		if(tid<128)	sh_sum[tid] += sh_sum[tid + 128];	__syncthreads();
+		if(tid<64)	sh_sum[tid] += sh_sum[tid + 64];	__syncthreads();
+		if(tid<32)	sh_sum[tid] += sh_sum[tid + 32];	__syncthreads();
+		if(tid<16)	sh_sum[tid] += sh_sum[tid + 16];	__syncthreads();
+		if(tid<8)	sh_sum[tid] += sh_sum[tid + 8];		__syncthreads();
+		if(tid<4)	sh_sum[tid] += sh_sum[tid + 4];		__syncthreads();
+		if(tid<2)	sh_sum[tid] += sh_sum[tid + 2];		__syncthreads();
+		if(tid<1)	sh_sum[tid] += sh_sum[tid + 1];		__syncthreads();
 		//	-assign sum to its block
 		if(tid==0)	bins[big] = sh_sum[tid];
 	}
@@ -888,8 +912,8 @@ labels__1_to_N( unsigned int WIDTH, 		unsigned int HEIGHT,
 	unsigned int big		= biy*gdx + bix;// block index on grid!
 	unsigned int tix		= bdx*bix + c;	// horizontal 	offset
 	unsigned int tiy		= bdy*biy + r;	// vertical 	offset
-	//unsigned int tid		= bdx * r + c;
-	unsigned int tid		= fBDX(WIDTH) * r + c;
+	unsigned int tid		= bdx * r + c;
+	//unsigned int tid		= fBDX(WIDTH) * r + c;
 
 	unsigned int y_offset	= (WIDTH*bdy*biy);
 	unsigned int x_offset	= (bdx*fBDY(HEIGHT)*bix);
@@ -1269,8 +1293,15 @@ reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned in
 
 template <class T>
 __global__ void
-histogram_shmem(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+histogram_shmem(const T *g_idata, const unsigned char *BINf, T *g_ohist, unsigned int map_len, unsigned int Nbins)
 {
+	/**
+	 *  g_idata : label map
+	 *  BINf	: imperviousness map filtered out by ROI (I have to eliminate the stride of zeros at the first row)
+	 *  g_ohist	: histogram count of g_idata
+	 *  map_len : original WIDTH*HEIGHT
+	 *  Nbins	: number of objects identified on BINf (including ZERO)
+	 */
 
     unsigned int tid 		= threadIdx.x;
     unsigned int bix 		= blockIdx.x;
@@ -1286,7 +1317,7 @@ histogram_shmem(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned
 
     while (i < map_len)
     {
-    	atomicAdd( &sdata[ g_idata[i] ], ROI[i] ); __syncthreads();
+    	atomicAdd( &sdata[ g_idata[i] ], BINf[i] ); __syncthreads();
         i += gridSize;
     }
     __threadfence_system();
@@ -1302,8 +1333,15 @@ histogram_shmem(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned
 
 template <class T>
 __global__ void
-histogram(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+histogram(const T *g_idata, const unsigned char *BINf, T *g_ohist, unsigned int map_len, unsigned int Nbins)
 {
+	/**
+	 *  g_idata : label map
+	 *  BINf	: imperviousness map filtered out by ROI (I have to eliminate the stride of zeros at the first row)
+	 *  g_ohist	: histogram count of g_idata
+	 *  map_len : original WIDTH*HEIGHT
+	 *  Nbins	: number of objects identified on BINf (including ZERO)
+	 */
 
     unsigned int tid 		= threadIdx.x;
     unsigned int bix 		= blockIdx.x;
@@ -1314,7 +1352,7 @@ histogram(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned int m
 
     while (i < map_len)
     {
-    	atomicAdd( &g_ohist[ g_idata[i] ], ROI[i] );
+    	atomicAdd( &g_ohist[ g_idata[i] ], BINf[i] );
         i += gridSize;
     }
 }
@@ -1465,9 +1503,10 @@ int main(int argc, char **argv){
 	CUDA_CHECK_RETURN( cudaMalloc( (void **)&urban_gpu, 	sizeChar_o 	) );
 	CUDA_CHECK_RETURN( cudaMemset( urban_gpu, 0, 			sizeChar_o 	) );
 	CUDA_CHECK_RETURN( cudaMalloc( (void **)&dev_ROI, 		sizeChar_o 	) );
+	CUDA_CHECK_RETURN( cudaMemset( dev_ROI,   0, 			sizeChar_o 	) );
 	// I consider the WIDTH offset in copy to leave the first row with all zeros!
 	CUDA_CHECK_RETURN( cudaMemcpy( urban_gpu+WIDTH,urban_cpu,sizeChar, cudaMemcpyHostToDevice ) );
-	CUDA_CHECK_RETURN( cudaMemcpy( dev_ROI, ROI, 			 sizeChar, cudaMemcpyHostToDevice ) );
+	CUDA_CHECK_RETURN( cudaMemcpy( dev_ROI+WIDTH, ROI, 		 sizeChar, cudaMemcpyHostToDevice ) );
 	// -3- lab_mat_cpu
 	CUDA_CHECK_RETURN( cudaMallocHost(&lab_mat_cpu,	 		sizeUintL_e	) );
 	CUDA_CHECK_RETURN( cudaMallocHost(&lab_mat_cpu_f,		sizeUintL_s	) );
@@ -1513,6 +1552,7 @@ int main(int argc, char **argv){
 	dim3 	block(tiledimX,tiledimY,1);
 	dim3 	grid(ntilesX,ntilesY,1);
 	unsigned int 	sh_mem	= (tiledimX*tiledimY)*(sizeof(unsigned int));
+	unsigned char 	sh_mem_f= (threads)*(sizeof(unsigned char));
 	dim3 	block_2(tiledimX,1,1); // ==> this is only possible if the block is squared !!!!!!!! Because I use the same threads for cols & rows
 	dim3 	grid_2(ntilesX,ntilesY,1);
 	dim3 	block_3(tiledimX*tiledimY,1,1);
@@ -1522,26 +1562,23 @@ int main(int argc, char **argv){
 	unsigned int Nblks_per_grid = N_sm*num_blocks_per_SM;
 	mapel_per_thread    = (unsigned int)ceil( (double)map_len / (double)((threads*2)*Nblks_per_grid) );// e.g. n / (14*3*512*2)
 	dim3 	dimBlock( threads, 1, 1 );
-	dim3 	dimGrid(  N_sm*num_blocks_per_SM,  1, 1 );
+	dim3 	dimGrid(  Nblks_per_grid,  1, 1 );
 
 
 	/* ....::: [0/5 stage] INTRA-TILE :::.... */
 	start_t = clock();
-	filter_roi<<<dimGrid,dimBlock>>>(urban_gpu,dev_ROI,map_len);
+	filter_roi<<<dimGrid,dimBlock,sh_mem_f>>>(urban_gpu,dev_ROI,WIDTH*HEIGHT_1);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",count_print,kern_0,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	/* INTERMEDIATE CHECK [activate/deactivate]*/
 	if (printme){
-		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
-		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
-		sprintf(buffer,"%s/data/-%d-%s__k1.tif",BASE_PATH,count_print,kern_0);
-		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
+		CUDA_CHECK_RETURN( cudaMemcpy( urban_cpu,urban_gpu+WIDTH,	sizeChar,cudaMemcpyDeviceToHost ) );
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_0);
+		geotiffwrite(FIL_BIN,buffer,MDbin,urban_cpu);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	/* ....::: [0/5 stage] INTRA-TILE :::.... */
-
-
 
 	/* ....::: [1/5 stage] INTRA-TILE :::.... */
 	start_t = clock();
@@ -1558,7 +1595,7 @@ int main(int argc, char **argv){
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
 */		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
 		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
-		sprintf(buffer,"%s/data/-%d-%s__k1.tif",BASE_PATH,count_print,kern_1);
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_1);
 		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
@@ -1579,7 +1616,7 @@ int main(int argc, char **argv){
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
 */		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
 		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
-		sprintf(buffer,"%s/data/-%d-%s__k2.tif",BASE_PATH,count_print,kern_2);
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_2);
 		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
@@ -1598,7 +1635,7 @@ int main(int argc, char **argv){
 		write_labmat_full(lab_mat_cpu, HEIGHT_e, WIDTH_e, buffer);
 */		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
 		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
-		sprintf(buffer,"%s/data/-%d-%s__k3.tif",BASE_PATH,count_print,kern_3);
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_3);
 		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
@@ -1617,7 +1654,7 @@ int main(int argc, char **argv){
 		write_labmat_tiled(lab_mat_cpu, tiledimY,tiledimY, ntilesY,ntilesX, HEIGHT_e,WIDTH_e, buffer);
 */		del_duplicated_lines<<<grid,block>>>(lab_mat_gpu,WIDTH_e,HEIGHT_e, lab_mat_gpu_f,WIDTH,HEIGHT);
 		CUDA_CHECK_RETURN( cudaMemcpy( lab_mat_cpu_f,lab_mat_gpu_f,	sizeUintL_s,cudaMemcpyDeviceToHost ) );
-		sprintf(buffer,"%s/data/-%d-%s.txt",BASE_PATH,count_print,kern_4);
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_4);
 		geotiffwrite(FIL_BIN,buffer,MDuint,lab_mat_cpu_f);
 	}
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
@@ -1747,10 +1784,10 @@ if (relabel){
 /*	if (isPow2(map_len)){ reduce6_hist<unsigned int, 512, true> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
 	}else{	 			  reduce6_hist<unsigned int, 512, false><<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);}
 */	if(smemSize0 < sharedMemPerBlock ){
-		histogram_shmem<unsigned int> <<<dimGrid,dimBlock,smemSize0>>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins_0);
+		histogram_shmem<unsigned int> <<<dimGrid,dimBlock,smemSize0>>>(lab_mat_gpu_f, urban_gpu+WIDTH, d_histogram, map_len, Nbins_0);
 		kern_6 = "histogram_shmem";
 	}else{
-		histogram<unsigned int> <<<dimGrid,dimBlock>>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins_0);
+		histogram<unsigned int> <<<dimGrid,dimBlock>>>(lab_mat_gpu_f, urban_gpu+WIDTH, d_histogram, map_len, Nbins_0);
 	}
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
