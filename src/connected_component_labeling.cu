@@ -90,8 +90,12 @@ char						buffer[255];
 //const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_BIN.tif";
 //const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/created-on-the-fly_ROI.tif";
 // created on-the-fly over the SS-GCI
-const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ccl_1toN_hist_bin.tif";
-const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ccl_1toN_hist_roi.tif";
+// -old-
+//const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_bin.tif";
+//const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_roi.tif";
+// -new-
+const char		*FIL_BIN	= "/home/giuliano/git/cuda/ssgci-data/ssgci_bin.tif";
+const char		*FIL_ROI	= "/home/giuliano/git/cuda/ssgci-data/ssgci_roi.tif";
 
 // size=[300, 204]
 //const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/ROI.tif";
@@ -334,8 +338,10 @@ write_labmat_full(unsigned int *lab_mat, unsigned int HEIGHT, unsigned int WIDTH
 		{
 //			if(cc>0 && cc%32==0) fprintf(fid,"\t");
 			fprintf(fid, "%6d ",lab_mat[WIDTH*rr+cc]);
+			printf("%6d ",lab_mat[WIDTH*rr+cc]);
 		}
 		fprintf(fid,"\n");
+		printf("\n");
 	}
 	fclose(fid);
 }
@@ -396,28 +402,9 @@ filter_roi( unsigned char *urban_gpu, const unsigned char *dev_ROI, unsigned int
     unsigned int i 			= bix*bdx + tid;
     unsigned int gridSize 	= bdx*gdx;
 
-    extern __shared__ unsigned char cpdata[];
-
-    //for(j=0;j<Nbins;j++) if(tid==0) sdata[j]=0;
-
     while (i < map_len)
     {
-    	// **with shared mem**//
-    	/*
-    	cpdata[tid]=0; __syncthreads();
-    	if( urban_gpu[i]==Vo && dev_ROI[i]==Vo) cpdata[tid]=Vo;
-    	__syncthreads();
-    	urban_gpu[i] = cpdata[tid]; __syncthreads();
-    	 */
-
-    	// **without** //
-    	//if( urban_gpu[i]==Vb | dev_ROI[i]==Vb) urban_gpu[i]=Vb;
-    	//if( urban_gpu[i]==Vo & dev_ROI[i]==Vo) urban_gpu[i]=Vo;
-    	//if( dev_ROI[i]==0) urban_gpu[i]=0;
-
-    	// **original** //
     	urban_gpu[i] *= dev_ROI[i];
-
         i += gridSize;
     }
 }
@@ -482,6 +469,16 @@ intra_tile_labeling(const unsigned char *urban,/*const unsigned char *ROI,*/ uns
 			 */
 			found = false;
 
+			/**  NOTE:
+			 * 		On the SS-GCI I have to substitute nw_pol(c,r,bdx) with lab_mat_sh[nw_pol(c,r,bdx)],
+			 * 		and the define
+			 * 			#define nw_pol(cc,rr,bdx)	lab_mat_sh[	(cc-1)	+	(rr-1)	*(bdx)	]
+			 * 		with the device
+			 * 			__device__ unsigned int nw_pol(unsigned int cc,unsigned int rr,unsigned int bdx){
+			 * 				return (cc-1)	+	(rr-1)	*(bdx);
+			 * 			}
+			 * 		Apply this to all combinations below.
+			 */
 			// NW:
 			if(	c>0 && r>0 && nw_pol(c,r,bdx)!=0 && nw_pol(c,r,bdx)<cc_pol(c,r,bdx))
 				{ cc_pol(c,r,bdx) = nw_pol(c,r,bdx); found = true; }
@@ -912,8 +909,8 @@ labels__1_to_N( unsigned int WIDTH, 		unsigned int HEIGHT,
 	unsigned int big		= biy*gdx + bix;// block index on grid!
 	unsigned int tix		= bdx*bix + c;	// horizontal 	offset
 	unsigned int tiy		= bdy*biy + r;	// vertical 	offset
-	unsigned int tid		= bdx * r + c;
-	//unsigned int tid		= fBDX(WIDTH) * r + c;
+	//unsigned int tid		= bdx * r + c;
+	unsigned int tid		= fBDX(WIDTH) * r + c;
 
 	unsigned int y_offset	= (WIDTH*bdy*biy);
 	unsigned int x_offset	= (bdx*fBDY(HEIGHT)*bix);
@@ -1293,7 +1290,7 @@ reduce6_hist(const T *g_idata, const unsigned char *ROI, T *g_ohist, unsigned in
 
 template <class T>
 __global__ void
-histogram_shmem(const T *g_idata, const unsigned char *BINf, T *g_ohist, unsigned int map_len, unsigned int Nbins)
+histogram_shmem_old(const T *g_idata, const unsigned char *BINf, T *g_ohist, unsigned int map_len, unsigned int Nbins)
 {
 	/**
 	 *  g_idata : label map
@@ -1327,6 +1324,46 @@ histogram_shmem(const T *g_idata, const unsigned char *BINf, T *g_ohist, unsigne
 	    // write result for this block to global memory
 	    if (tid == 0) atomicAdd( &g_ohist[j], sdata[j] );
     }
+    // I have to loop on available tids to solve the following instead of let working only one tid=0!!!
+    //if (tid < Nbins) atomicAdd( &g_ohist[tid], sdata[tid] );
+}
+
+__global__ void
+histogram_shmem(const unsigned int *g_idata, const unsigned char *BINf, unsigned int *g_ohist, unsigned int map_len, unsigned int Nbins)
+{
+	/**
+	 *  g_idata : label map
+	 *  BINf	: imperviousness map filtered out by ROI (I have to eliminate the stride of zeros at the first row)
+	 *  g_ohist	: histogram count of g_idata
+	 *  map_len : original WIDTH*HEIGHT
+	 *  Nbins	: number of objects identified on BINf (including ZERO)
+	 */
+
+    unsigned int tid 		= threadIdx.x;
+    unsigned int bix 		= blockIdx.x;
+    unsigned int bdx 		= blockDim.x;
+    unsigned int gdx 		= gridDim.x;
+    unsigned int i 			= bix*bdx + tid;
+    unsigned int gridSize 	= bdx*gdx;
+    unsigned int j			= 0;
+
+    extern __shared__ unsigned int sdata[];
+
+    for(j=0;j<Nbins;j++) if(tid==0) sdata[j]=0;
+
+    while (i < map_len)
+    {
+    	atomicAdd( &sdata[ g_idata[i] ], BINf[i] ); __syncthreads();
+        i += gridSize;
+    }
+    __threadfence_system();
+    //__syncthreads();
+
+    for(j=0;j<Nbins;j++){// start from j=1, to avoid the computation of background
+	    // write result for this block to global memory
+	    if (tid == 0) atomicAdd( &g_ohist[j], sdata[j] );
+    }
+    __threadfence_system();
     // I have to loop on available tids to solve the following instead of let working only one tid=0!!!
     //if (tid < Nbins) atomicAdd( &g_ohist[tid], sdata[tid] );
 }
@@ -1567,7 +1604,7 @@ int main(int argc, char **argv){
 
 	/* ....::: [0/5 stage] INTRA-TILE :::.... */
 	start_t = clock();
-	filter_roi<<<dimGrid,dimBlock,sh_mem_f>>>(urban_gpu,dev_ROI,WIDTH*HEIGHT_1);
+	filter_roi<<<dimGrid,dimBlock>>>(urban_gpu,dev_ROI,WIDTH*HEIGHT_1);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %20s\t%6d [msec]\n",count_print,kern_0,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
@@ -1784,7 +1821,8 @@ if (relabel){
 /*	if (isPow2(map_len)){ reduce6_hist<unsigned int, 512, true> <<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);
 	}else{	 			  reduce6_hist<unsigned int, 512, false><<< dimGrid, dimBlock, smemSize >>>(lab_mat_gpu_f, dev_ROI, d_histogram, map_len, Nbins);}
 */	if(smemSize0 < sharedMemPerBlock ){
-		histogram_shmem<unsigned int> <<<dimGrid,dimBlock,smemSize0>>>(lab_mat_gpu_f, urban_gpu+WIDTH, d_histogram, map_len, Nbins_0);
+		//histogram_shmem<unsigned int> <<<dimGrid,dimBlock,smemSize0>>>(lab_mat_gpu_f, urban_gpu+WIDTH, d_histogram, map_len, Nbins_0);
+		histogram_shmem<<<dimGrid,dimBlock,smemSize0>>>(lab_mat_gpu_f, urban_gpu+WIDTH, d_histogram, map_len, Nbins_0);
 		kern_6 = "histogram_shmem";
 	}else{
 		histogram<unsigned int> <<<dimGrid,dimBlock>>>(lab_mat_gpu_f, urban_gpu+WIDTH, d_histogram, map_len, Nbins_0);

@@ -117,13 +117,6 @@
 							</tool>
 						</toolChain>
 					</folderInfo>
-					<fileInfo id="com.nvidia.cuda.ide.configuration.release.776099838.1188770489" name="ccl_4_ss-gci.cu" rcbsApplicability="disable" resourcePath="src/ccl_4_ss-gci.cu" toolsToInvoke="nvcc.compiler.base.1377728982.135777069">
-						<tool id="nvcc.compiler.base.1377728982.135777069" name="NVCC Compiler" superClass="nvcc.compiler.base.1377728982">
-							<inputType id="nvcc.compiler.input.cu.1971382787" superClass="nvcc.compiler.input.cu"/>
-							<inputType id="nvcc.compiler.input.cpp.987270575" superClass="nvcc.compiler.input.cpp"/>
-							<inputType id="nvcc.compiler.input.c.2077854551" superClass="nvcc.compiler.input.c"/>
-						</tool>
-					</fileInfo>
 					<fileInfo id="com.nvidia.cuda.ide.configuration.release.776099838.676454467" name="kernel.cu" rcbsApplicability="disable" resourcePath="includes/kernel.cu" toolsToInvoke="nvcc.compiler.base.1377728982.703347024">
 						<tool id="nvcc.compiler.base.1377728982.703347024" name="NVCC Compiler" superClass="nvcc.compiler.base.1377728982">
 							<option id="nvcc.compiler.modules.353417037" name="File modules" superClass="nvcc.compiler.modules" valueType="stringList">
@@ -175,12 +168,13 @@
 		</configuration>
 	</storageModule>
 	<storageModule moduleId="org.eclipse.cdt.core.LanguageSettingsProviders"/>
+	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 	<storageModule moduleId="scannerConfiguration">
 		<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId=""/>
-		<scannerConfigBuildInfo instanceId="com.nvidia.cuda.ide.configuration.debug.362806317;com.nvidia.cuda.ide.configuration.debug.362806317.;nvcc.compiler.base.1184326528;nvcc.compiler.input.cpp.1462798588">
+		<scannerConfigBuildInfo instanceId="com.nvidia.cuda.ide.configuration.debug.362806317;com.nvidia.cuda.ide.configuration.debug.362806317.;nvcc.compiler.base.1184326528;nvcc.compiler.input.c.544700269">
 			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.nvidia.cuda.ide.build.NVCCPerProjectProfile"/>
 		</scannerConfigBuildInfo>
-		<scannerConfigBuildInfo instanceId="com.nvidia.cuda.ide.configuration.debug.362806317;com.nvidia.cuda.ide.configuration.debug.362806317.;nvcc.compiler.base.1184326528;nvcc.compiler.input.c.544700269">
+		<scannerConfigBuildInfo instanceId="com.nvidia.cuda.ide.configuration.debug.362806317;com.nvidia.cuda.ide.configuration.debug.362806317.;nvcc.compiler.base.1184326528;nvcc.compiler.input.cpp.1462798588">
 			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.nvidia.cuda.ide.build.NVCCPerProjectProfile"/>
 		</scannerConfigBuildInfo>
 		<scannerConfigBuildInfo instanceId="com.nvidia.cuda.ide.configuration.release.776099838;com.nvidia.cuda.ide.configuration.release.776099838.;nvcc.compiler.base.1377728982;nvcc.compiler.input.cu.331360029">
@@ -196,5 +190,4 @@
 			<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId="com.nvidia.cuda.ide.build.NVCCPerProjectProfile"/>
 		</scannerConfigBuildInfo>
 	</storageModule>
-	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cproject>

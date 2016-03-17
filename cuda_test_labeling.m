@@ -4,12 +4,17 @@ BASE_DIR        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_seal
 T               = NaN(2,1);
 % –/O
 FIL_LAB         = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/LAB-MAT-cuda.tif';
-FIL_LAB_ssgci   = fullfile(BASE_DIR,'data','ccl_1toN_hist_lab.tif');
+FIL_LAB_ssgci   = fullfile(BASE_DIR,'data','ssgci_lab.tif');
 FIL_LABrand     = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/Lcuda_random.tif';
-
+%    CUDA-C
 FIL_HIST        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/cu_histogram.txt';
 FIL_IDra        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ID_rand_cpu.txt';
 FIL_ID1N        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ID_1toN_cpu.txt';
+%    JCUDA
+FIL_HIST_ss      = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_histogram.txt';
+FIL_IDra_ss      = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_ID_rand_cpu.txt';
+FIL_ID1N_ss      = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_ID_1toN_cpu.txt';
+
 WRITE_TXT       = @(matname,ntx,nty,tdx,tdy) sprintf('%s-nt%sx%s-td%sx%s.txt',matname,num2str(ntx),num2str(nty),num2str(tdx),num2str(tdy));
 % cuda code compile/run:
 exefil          = fullfile(BASE_DIR,'Release','soil-sealing-2');
@@ -43,8 +48,12 @@ T(2)            = 0.0;% [s]
 % FIL_ROI         = fullfile(BASE_DIR,'data','created-on-the-fly_ROI.tif');
 % FIL_BIN         = fullfile(BASE_DIR,'data','created-on-the-fly_BIN.tif');
 %   created on the ss-gci
-FIL_ROI         = fullfile(BASE_DIR,'data','ccl_1toN_hist_roi.tif');
-FIL_BIN         = fullfile(BASE_DIR,'data','ccl_1toN_hist_bin.tif');
+% -old-
+% FIL_ROI         = fullfile(BASE_DIR,'data','ssgci_roi.tif');
+% FIL_BIN         = fullfile(BASE_DIR,'data','ssgci_bin.tif');
+% -new-
+FIL_BIN         = '/home/giuliano/git/cuda/ssgci-data/ssgci_bin.tif';
+FIL_ROI         = '/home/giuliano/git/cuda/ssgci-data/ssgci_roi.tif';
 
 %   other data:
 % FIL_ROI       = fullfile('/home/giuliano/git/cuda/fragmentation/data','ROI.tif');
@@ -69,7 +78,7 @@ save_mats       = 0; % Do you want to store BIN & MAT files for specific runs?
 print_me        = 1; % Do you want .cu code print the output of single every kernel?
 create_bin      = 0; % Do you want to create a new BIN array for a new comparison?
 deep_check      = 1; % Do you want to perform a deep comparison?
-plot_me         = 1; % Do you want to plot following maps? {bin,roi,Lml,Lcuda}
+plot_me         = 0; % Do you want to plot following maps? {bin,roi,Lml,Lcuda}
 % BIN characteristics:
 % tile size in XY – fixed [no more then 32x32]:
 tiledimX        = 32;  % 512 - 32 - 30
@@ -170,7 +179,7 @@ force_to_load = true;
 if ~create_bin || force_to_load
     if cpy_ssgci_data
         try
-            copyfile('/opt/soil_sealing/exchange_data/testing/ccl_1toN_hist_*', fullfile(BASE_DIR,'data') )
+            copyfile('/opt/soil_sealing/exchange_data/testing/ssgci_*', fullfile(BASE_DIR,'data') )
         catch exception
             warning('%s ––> %s\n',exception.identifier,exception.message)
         end
@@ -458,8 +467,8 @@ else
     fprintf( '%s\n', '...the file produced on-the-fly over the SS-GCI is not available!' )
 end
 fprintf('...end!\n')
-%% compare | histogram
-fprintf('\nC O M P A R I S O N   o f   H I S T O G R A M  ::  [1toN vs ml] \n')
+%% compare | histogram | [cuda-c vs ml]
+fprintf('\nC O M P A R I S O N   o f   H I S T O G R A M  ::  [cuda-c vs ml] \n')
 if cuda_relabel
    
 % ** SELECTOR FOR PRINT AMOUNT ––> 1 or 2? **
@@ -495,9 +504,10 @@ if cuda_relabel
             printed_line = printed_line +1;
             err__ = true;
             Cerr__ = Cerr__ +1;
-            fprintf('%6d%10d%10d%10d%10d%17d*\n',ii,currIdxCu,Cids(ii),hist_cu(currIdxCu),hist_ml(Cids(ii)),err__)
+            fprintf('%6d%10d%10d%10d%10d%17d*',ii,currIdxCu,Cids(ii),hist_cu(currIdxCu),hist_ml(Cids(ii)),err__)
+            fprintf('\t[cuda map has %d pixels]\n',sum(currIdxCu == Lcuda(:)))
         else
-            if printed_line>8 && ~mod(ii,10)==0, continue, end % do not write good ones always but every 100 steps
+            if printed_line>8 && ~mod(ii,round(numel(hist_cu)/10))==0, continue, end % do not write good ones always but every 100 steps
             printed_line = printed_line +1;
             fprintf('%6d%10d%10d%10d%10d%18d\n',ii,currIdxCu,Cids(ii),hist_cu(currIdxCu),hist_ml(Cids(ii)),err__)
         end
@@ -519,14 +529,88 @@ if cuda_relabel
     
     fprintf( '%s\n', repmat('–',1,65) );
     if Cerr__>0
+%         fprintf('%45s%18d\n','Errors count is more than ––>',Cerr__);
+        fprintf('%45s%18d\n','Errors count is equal to ––>',Cerr__);
+    elseif ii==Nids
+        fprintf('%35s[%5d] ––>%18d\n','Errors count on all objects',ii,Cerr__);
+%     elseif ii>20
+%         fprintf('%45s%18d\n','Errors count till object 20 ––>',Cerr__);
+    end
+else
+    warning('Impossible without the file %s',FIL_HIST);
+end
+fprintf( '\n' )
+%% compare | histogram | [jcuda vs ml]
+fprintf('\nC O M P A R I S O N   o f   H I S T O G R A M  ::  [jcuda vs ml] \n')
+if cuda_relabel && cpy_ssgci_data
+    hist_ss     = load( FIL_HIST_ss );
+    hist_ss(1)  = [];
+   
+% ** SELECTOR FOR PRINT AMOUNT ––> 1 or 2? **
+% 1 % to limit the number of prints:
+%     Nids        = 10;
+%     Nids        = min(Nids,numel(IDml));
+%     kind_chk    = fprintf('  [The checking procedure is incomplete!]\n  [Set option #2 for full checking the histogram counts!]\n');
+% 2 % to print all objects with step 100
+    Nids        = numel(IDml);
+    kind_chk    = fprintf('  [A full checking procedure is selected!]\n  [This is time-consuming for large histograms!]\n');
+% ** SELECTOR FOR PRINT AMOUNT ––> 1 or 2? **
+    
+    printed_line    = 0;
+    Cerr__          = 0;
+    hist_ml         = zeros(size(IDml));
+    fprintf( '%s\n', repmat('–',1,65) );
+    % MatLab is my truth: Ids to be Checked:
+    Cids = randperm(numel(hist_ml),Nids);% Cids is the list of MatLab IDs
+    fprintf('%6s%20s%20s%18s\n','o b j','l a b e l s','h i s t o g r a m','e r r o r')
+    fprintf('%6s%10s%10s%10s%10s%18s\n','#','JCUDA','MatLab','JCUDA','MatLab','jcuda vs matlab')
+    for ii = 1:Nids
+        %if Cerr__ > 20 || ii>20, break, end %activate this to limit the number of prints
+        err__ = false;
+        hist_ml(Cids(ii)) = sum(Lml(:)==Cids(ii));
+        [ridx,cidx] = find(Lml==Cids(ii),1,'first');
+        currIdxCu = Lcuda_ssgci(ridx,cidx);
+        if currIdxCu==0
+            printed_line = printed_line +1;
+            err__ = true;
+            Cerr__ = Cerr__ +1;
+            fprintf('%6d%10d%10d%10d%10d%17d*\n',ii,currIdxCu,Cids(ii),currIdxCu,hist_ml(Cids(ii)),err__)
+        elseif hist_ml(Cids(ii)) ~= hist_ss(currIdxCu)
+            printed_line = printed_line +1;
+            err__ = true;
+            Cerr__ = Cerr__ +1;
+            fprintf('%6d%10d%10d%10d%10d%17d*\n',ii,currIdxCu,Cids(ii),hist_ss(currIdxCu),hist_ml(Cids(ii)),err__)
+        else
+            if printed_line>8 && ~mod(ii,round(numel(hist_ss)/10))==0, continue, end % do not write good ones always but every 100 steps
+            printed_line = printed_line +1;
+            fprintf('%6d%10d%10d%10d%10d%18d\n',ii,currIdxCu,Cids(ii),hist_ss(currIdxCu),hist_ml(Cids(ii)),err__)
+        end
+    end
+    if Nids<numel(IDml)
+        [~,~,iIDml]=setxor(Cids,IDml);
+        fprintf(' . . .\n')
+        err__ = false;
+        hist_ml(iIDml(end)) = sum(Lml(:)==iIDml(end));
+        [ridx,cidx] = find(Lml==iIDml(end),1,'first');
+        currIdxCu = Lcuda(ridx,cidx);
+        if hist_ml(iIDml(end)) ~= hist_ss(currIdxCu)
+            err__ = true;
+            fprintf('%6d%10d%10d%10d%10d%17d*\n',numel(IDml),currIdxCu,iIDml(end),hist_ss(currIdxCu),hist_ml(iIDml(end)),err__)
+        else
+            fprintf('%6d%10d%10d%10d%10d%18d\n',numel(IDml),currIdxCu,iIDml(end),hist_ss(currIdxCu),hist_ml(iIDml(end)),err__)
+        end        
+    end
+    
+    fprintf( '%s\n', repmat('–',1,65) );
+    if Cerr__>0
         fprintf('%45s%18d\n','Errors count is more than ––>',Cerr__);
     elseif ii==Nids
-        fprintf('%35s[%5d] ––>%18d\n','Errors count on all objects',Cerr__,ii);
+        fprintf('%35s[%5d] ––>%18d\n','Errors count on all objects',ii,Cerr__);
     elseif ii>20
         fprintf('%45s%18d\n','Errors count till object 20 ––>',Cerr__);
     end
 else
-    warning('Impossible without the file %s',FIL_HIST);
+    warning('Impossible without the file %s',FIL_HIST_ss);
 end
 fprintf( '\n' )
 %% compare | labels | IDs to maps [1-to-N vs random]
@@ -665,10 +749,15 @@ if plot_me
     % figure(1),subplot(132),gpcolor(Lml),title('MatLab')
     % figure(1),subplot(133),gpcolor(Lcuda),title('CUDA')
     figure(11)
-    subplot(221),imshow(logical(BIN)),title('BIN'),pause(0.5)
-    subplot(222),imshow(logical(ROI)),title('ROI'),pause(0.5)
-    subplot(223),imshow(label2rgb(Lcuda)),title('CUDA'),pause(0.5)
-    subplot(224),imshow(label2rgb(Lml)),title('MatLab'),pause(0.5)
+    subplot(221),imshow(logical(BIN)),title('BIN'),pause(0.05)
+    subplot(222),imshow(logical(ROI)),title('ROI'),pause(0.05)
+    subplot(223),imshow(label2rgb(Lcuda)),title('CUDA'),pause(0.05)
+    subplot(224),imshow(label2rgb(Lml)),title('MatLab'),pause(0.05)
+    if cpy_ssgci_data
+        figure(12)
+        subplot(211),imshow(label2rgb(Lcuda_ssgci)),title('SS-GCI'),pause(0.05)
+        subplot(212),imshow(label2rgb((Lcuda_ssgci - Lcuda))),title('(SS-GCI – CUDA)'),pause(0.05)
+    end
 end
 %% speedup
 % fprintf('\n');
@@ -745,3 +834,4 @@ else
     fprintf('...disabled!\n')
 end
 fprintf( '\n' )
+%% compare
