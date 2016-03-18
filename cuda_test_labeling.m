@@ -4,16 +4,16 @@ BASE_DIR        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_seal
 T               = NaN(2,1);
 % –/O
 FIL_LAB         = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/LAB-MAT-cuda.tif';
-FIL_LAB_ssgci   = fullfile(BASE_DIR,'data','ssgci_lab.tif');
 FIL_LABrand     = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/Lcuda_random.tif';
+FIL_LAB_ssgci   = '/media/DATI/db-backup/ssgci-data/testing/ssgci_lab.tif';
 %    CUDA-C
 FIL_HIST        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/cu_histogram.txt';
 FIL_IDra        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ID_rand_cpu.txt';
 FIL_ID1N        = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ID_1toN_cpu.txt';
 %    JCUDA
-FIL_HIST_ss      = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_histogram.txt';
-FIL_IDra_ss      = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_ID_rand_cpu.txt';
-FIL_ID1N_ss      = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_ID_1toN_cpu.txt';
+FIL_HIST_ss      = '/media/DATI/db-backup/ssgci-data/testing/ssgci_histogram.txt';
+FIL_IDra_ss      = '/media/DATI/db-backup/ssgci-data/testing/ssgci_ID_rand_cpu.txt';
+FIL_ID1N_ss      = '/media/DATI/db-backup/ssgci-data/testing/ssgci_ID_1toN_cpu.txt';
 
 WRITE_TXT       = @(matname,ntx,nty,tdx,tdy) sprintf('%s-nt%sx%s-td%sx%s.txt',matname,num2str(ntx),num2str(nty),num2str(tdx),num2str(tdy));
 % cuda code compile/run:
@@ -52,8 +52,8 @@ T(2)            = 0.0;% [s]
 % FIL_ROI         = fullfile(BASE_DIR,'data','ssgci_roi.tif');
 % FIL_BIN         = fullfile(BASE_DIR,'data','ssgci_bin.tif');
 % -new-
-FIL_BIN         = '/home/giuliano/git/cuda/ssgci-data/ssgci_bin.tif';
-FIL_ROI         = '/home/giuliano/git/cuda/ssgci-data/ssgci_roi.tif';
+FIL_BIN         = '/media/DATI/db-backup/ssgci-data/testing/ssgci_bin.tif';
+FIL_ROI         = '/media/DATI/db-backup/ssgci-data/testing/ssgci_roi.tif';
 
 %   other data:
 % FIL_ROI       = fullfile('/home/giuliano/git/cuda/fragmentation/data','ROI.tif');
@@ -71,7 +71,7 @@ FIL_ROI         = '/home/giuliano/git/cuda/ssgci-data/ssgci_roi.tif';
 % FIL_ROI		= '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006.tif';
 % FIL_BIN		= '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006.tif';
 
-cpy_ssgci_data  = 0; % Do you want to copy MapStore data and run check on these?
+use_ssgci_data  = 1; % Do you want to use MapStore data and run check on these?
 cu_compile      = 0; % Do you want MatLab compile your source .cu file?
 cu_run          = 1; % Do you want to run the cuda code (compiled here or outside)?
 save_mats       = 0; % Do you want to store BIN & MAT files for specific runs?
@@ -84,9 +84,9 @@ plot_me         = 0; % Do you want to plot following maps? {bin,roi,Lml,Lcuda}
 tiledimX        = 32;  % 512 - 32 - 30
 tiledimY        = 32;  % 2   - 32 - 30
 % number of tiles in XY:
-ntilesX         = 13;
-ntilesY         = 12;
-threshold       = 0.8300; % set image sparsity: near 0 high density, near 1 high sparsity
+ntilesX         = 14;
+ntilesY         = 15;
+threshold       = 0.3300; % set image density: near 0 high sparsity, near 1 high density
 %% set dim:
 if create_bin
 % NOTE:
@@ -175,15 +175,15 @@ end
 % FIL_BIN = FIL_BIN_crop;
 % end
 %% load BIN & ROI from geotiff
-force_to_load = true;
-if ~create_bin || force_to_load
-    if cpy_ssgci_data
-        try
-            copyfile('/opt/soil_sealing/exchange_data/testing/ssgci_*', fullfile(BASE_DIR,'data') )
-        catch exception
-            warning('%s ––> %s\n',exception.identifier,exception.message)
-        end
-    end
+% force_to_load = true;
+if ~create_bin %|| force_to_load
+%     if cpy_ssgci_data
+%         try
+%             copyfile('/opt/soil_sealing/exchange_data/testing/ssgci_*', fullfile(BASE_DIR,'data') )
+%         catch exception
+%             warning('%s ––> %s\n',exception.identifier,exception.message)
+%         end
+%     end
     fprintf('Loading BIN... %s\t',FIL_BIN)
     BIN         = geotiffread( FIL_BIN );
     fprintf('...done!\n')
@@ -414,7 +414,7 @@ fprintf('...end!\n')
 %% [SS-GCI]
 %% -- compare | labels [ss-gci vs 1toN]
 fprintf('\nC O M P A R I S O N ::  s s – g c i   l a b e l s\n')
-if exist('FIL_LAB_ssgci','var') && cpy_ssgci_data
+if exist('FIL_LAB_ssgci','var') && use_ssgci_data
     Lcuda_ssgci  = double( geotiffread( FIL_LAB_ssgci ) );
     DIFFER  = Lcuda_ssgci - Lcuda;
     idx     = find(DIFFER);
@@ -449,7 +449,7 @@ end
 fprintf('End!\n')
 %% -- find problems |  [ss-gci vs 1toN]
 fprintf('Searching for problems...\n')
-if exist('FIL_LAB_ssgci','var') && cpy_ssgci_data
+if exist('FIL_LAB_ssgci','var') && use_ssgci_data
     eFound = unique( UL( find(diff(UL(:,1))==0), 1 ) );
 % SUBSTITUTIONS :: ml ––> 1toN, cuda ––> ss-gci
     for ii = 1:min(20,length(eFound))
@@ -542,7 +542,7 @@ end
 fprintf( '\n' )
 %% compare | histogram | [jcuda vs ml]
 fprintf('\nC O M P A R I S O N   o f   H I S T O G R A M  ::  [jcuda vs ml] \n')
-if cuda_relabel && cpy_ssgci_data
+if cuda_relabel && use_ssgci_data
     hist_ss     = load( FIL_HIST_ss );
     hist_ss(1)  = [];
    
@@ -579,7 +579,8 @@ if cuda_relabel && cpy_ssgci_data
             printed_line = printed_line +1;
             err__ = true;
             Cerr__ = Cerr__ +1;
-            fprintf('%6d%10d%10d%10d%10d%17d*\n',ii,currIdxCu,Cids(ii),hist_ss(currIdxCu),hist_ml(Cids(ii)),err__)
+            fprintf('%6d%10d%10d%10d%10d%17d*',ii,currIdxCu,Cids(ii),hist_ss(currIdxCu),hist_ml(Cids(ii)),err__)
+            fprintf('\t[jcuda map has %d pixels]\n',sum(currIdxCu == Lcuda_ssgci(:)))
         else
             if printed_line>8 && ~mod(ii,round(numel(hist_ss)/10))==0, continue, end % do not write good ones always but every 100 steps
             printed_line = printed_line +1;
@@ -753,7 +754,7 @@ if plot_me
     subplot(222),imshow(logical(ROI)),title('ROI'),pause(0.05)
     subplot(223),imshow(label2rgb(Lcuda)),title('CUDA'),pause(0.05)
     subplot(224),imshow(label2rgb(Lml)),title('MatLab'),pause(0.05)
-    if cpy_ssgci_data
+    if use_ssgci_data
         figure(12)
         subplot(211),imshow(label2rgb(Lcuda_ssgci)),title('SS-GCI'),pause(0.05)
         subplot(212),imshow(label2rgb((Lcuda_ssgci - Lcuda))),title('(SS-GCI – CUDA)'),pause(0.05)

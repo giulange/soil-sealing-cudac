@@ -94,8 +94,8 @@ char						buffer[255];
 //const char 		*FIL_BIN	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_bin.tif";
 //const char 		*FIL_ROI	= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/data/ssgci_roi.tif";
 // -new-
-const char		*FIL_BIN	= "/home/giuliano/git/cuda/ssgci-data/ssgci_bin.tif";
-const char		*FIL_ROI	= "/home/giuliano/git/cuda/ssgci-data/ssgci_roi.tif";
+const char		*FIL_BIN	= "/media/DATI/db-backup/ssgci-data/testing/ssgci_bin.tif";
+const char		*FIL_ROI	= "/media/DATI/db-backup/ssgci-data/testing/ssgci_roi.tif";
 
 // size=[300, 204]
 //const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/ROI.tif";
@@ -338,10 +338,10 @@ write_labmat_full(unsigned int *lab_mat, unsigned int HEIGHT, unsigned int WIDTH
 		{
 //			if(cc>0 && cc%32==0) fprintf(fid,"\t");
 			fprintf(fid, "%6d ",lab_mat[WIDTH*rr+cc]);
-			printf("%6d ",lab_mat[WIDTH*rr+cc]);
+			//printf("%6d ",lab_mat[WIDTH*rr+cc]);
 		}
 		fprintf(fid,"\n");
-		printf("\n");
+		//printf("\n");
 	}
 	fclose(fid);
 }
@@ -394,7 +394,7 @@ delete_file( const char *file_name )
 }
 
 __global__ void
-filter_roi( unsigned char *urban_gpu, const unsigned char *dev_ROI, unsigned int map_len){
+filter_roi( unsigned char *BIN, const unsigned char *ROI, unsigned int map_len){
     unsigned int tid 		= threadIdx.x;
     unsigned int bix 		= blockIdx.x;
     unsigned int bdx 		= blockDim.x;
@@ -404,7 +404,8 @@ filter_roi( unsigned char *urban_gpu, const unsigned char *dev_ROI, unsigned int
 
     while (i < map_len)
     {
-    	urban_gpu[i] *= dev_ROI[i];
+    	//BIN[i] *= ROI[i];
+    	BIN[i] = (unsigned char) ((int)BIN[i] * (int)ROI[i]);
         i += gridSize;
     }
 }
@@ -1568,6 +1569,7 @@ int main(int argc, char **argv){
  *		KERNELS INVOCATION
  *
  *			*************************
+ *			-0- roi_bin
  *			-1- intra_tile_labeling		|  ––> 1st Stage :: intra-tile		:: mandatory		––––|
  *																									|
  *			-2- stitching_tiles			|\															| *random CCL labeling*
